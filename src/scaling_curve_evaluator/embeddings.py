@@ -1,0 +1,139 @@
+import importlib
+import json
+from pathlib import Path
+
+import torch
+
+# Maps policy type string (from config.json) to (module_path, class_name)
+_POLICY_REGISTRY: dict[str, tuple[str, str]] = {
+    "act": ("lerobot.common.policies.act.modeling_act", "ACTPolicy"),
+    "diffusion": ("lerobot.common.policies.diffusion.modeling_diffusion", "DiffusionPolicy"),
+    "pi0": ("lerobot.common.policies.pi0.modeling_pi0", "PI0Policy"),
+    "pi0fast": ("lerobot.common.policies.pi0fast.modeling_pi0fast", "PI0FastPolicy"),
+    "tdmpc": ("lerobot.common.policies.tdmpc.modeling_tdmpc", "TDMPCPolicy"),
+    "vqbet": ("lerobot.common.policies.vqbet.modeling_vqbet", "VQBeTPolicy"),
+}
+
+
+def _resolve_device(device: str) -> torch.device:
+    if device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device)
+
+
+def _flatten_embedding(t: torch.Tensor) -> torch.Tensor:
+    """Reduce any shaped tensor to a 1-D or 2-D [N, D] vector."""
+    if t.dim() <= 2:
+        return t
+    elif t.dim() == 3:
+        return t.mean(dim=1)  # [B, seq, D] -> [B, D]
+    else:
+        return t.mean(dim=list(range(2, t.dim())))  # [B, C, H, W] -> [B, C]
+
+
+class PolicyEmbeddingExtractor:
+    """Extract per-camera embeddings from a LeRobot policy via a forward hook.
+
+    Args:
+        policy_dir: Path to directory containing config.json + weights.
+        hook_module: Dotted attribute path to the module to hook, e.g. "model.backbone".
+            Common values:
+                ACT             -> "model.backbone"
+                DiffusionPolicy -> "model.obs_encoder"
+                Pi0             -> "model.paligemma_with_expert.paligemma.vision_tower"
+        device: "auto", "cpu", "cuda", or "cuda:N".
+    """
+
+    def __init__(self, policy_dir: str, hook_module: str, device: str = "auto"):
+        self.device = _resolve_device(device)
+        self.policy = self._load_policy(Path(policy_dir))
+        self.policy.eval().to(self.device)
+        self._hook_outputs: list[torch.Tensor] = []
+        self._hook_handle = self._register_hook(hook_module)
+
+    # ------------------------------------------------------------------
+    # Setup
+    # ------------------------------------------------------------------
+
+    def _load_policy(self, policy_dir: Path):
+        config = json.loads((policy_dir / "config.json").read_text())
+        # LeRobot configs typically store type under "type" or "model_type"
+        raw_type = config.get("type") or config.get("model_type") or ""
+        policy_type = raw_type.lower().replace("config", "").strip("_-")
+
+        if policy_type not in _POLICY_REGISTRY:
+            raise ValueError(
+                f"Unsupported policy type '{policy_type}'. "
+                f"Supported: {list(_POLICY_REGISTRY)}"
+            )
+
+        module_path, class_name = _POLICY_REGISTRY[policy_type]
+        cls = getattr(importlib.import_module(module_path), class_name)
+        return cls.from_pretrained(str(policy_dir))
+
+    def _register_hook(self, module_path: str):
+        module = self.policy
+        for attr in module_path.split("."):
+            module = getattr(module, attr)
+
+        def _hook(mod, inp, output):
+            if isinstance(output, torch.Tensor):
+                self._hook_outputs.append(output.detach().cpu())
+            elif isinstance(output, (tuple, list)) and len(output) > 0:
+                first = output[0]
+                if isinstance(first, torch.Tensor):
+                    self._hook_outputs.append(first.detach().cpu())
+
+        return module.register_forward_hook(_hook)
+
+    # ------------------------------------------------------------------
+    # Extraction
+    # ------------------------------------------------------------------
+
+    def extract_per_camera(
+        self, observation: dict[str, torch.Tensor], camera_keys: list[str]
+    ) -> dict[str, torch.Tensor]:
+        """Run one forward pass and return {camera_key: embedding [D]}.
+
+        The hook fires at `hook_module`. If it fires once per camera image
+        (common for CNN backbones), each output is mapped to the corresponding
+        camera. If it fires once with all cameras batched in the first
+        dimension, the output is split evenly.
+        """
+        batch = {
+            k: v.unsqueeze(0).to(self.device)
+            for k, v in observation.items()
+            if isinstance(v, torch.Tensor)
+        }
+
+        self._hook_outputs = []
+        with torch.no_grad():
+            if hasattr(self.policy, "reset"):
+                self.policy.reset()
+            self.policy.select_action(batch)
+
+        outputs = [_flatten_embedding(o) for o in self._hook_outputs]
+        n_cams = len(camera_keys)
+
+        if len(outputs) == n_cams:
+            # Hook fired once per camera
+            return {k: outputs[i].squeeze(0) for i, k in enumerate(camera_keys)}
+
+        if len(outputs) == 1:
+            flat = outputs[0]  # [N, D] or [1, D]
+            if flat.shape[0] == n_cams:
+                # All cameras batched together in dim-0
+                return {k: flat[i] for i, k in enumerate(camera_keys)}
+            # Single fused embedding — replicate for all cameras so downstream
+            # per-camera similarity still works (will produce identical scores)
+            emb = flat.squeeze(0)
+            return {k: emb for k in camera_keys}
+
+        raise RuntimeError(
+            f"Hook fired {len(outputs)} time(s) but expected {n_cams} camera(s). "
+            "Try a different hook_module path."
+        )
+
+    def __del__(self):
+        if hasattr(self, "_hook_handle") and self._hook_handle:
+            self._hook_handle.remove()

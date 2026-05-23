@@ -1,0 +1,1 @@
+REPO_ID=seveir/Task-GrabCuicuishaPlaceMatting-30 TOOL=aria2c INCLUDE_PATTERNS= EXCLUDE_PATTERNS= DATASET=1 HF_USERNAME= HF_TOKEN= HF_TOKEN=https://huggingface.co REVISION=main

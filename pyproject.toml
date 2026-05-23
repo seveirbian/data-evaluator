@@ -1,0 +1,20 @@
+[project]
+name = "data-evaluator"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "huggingface-hub>=1.16.1",
+    "rerun-sdk>=0.32.2",
+    "lerobot",
+    "av",
+    "numpy",
+    "pandas",
+    "pillow",
+    "tqdm",
+    "torch",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
