@@ -1,4 +1,4 @@
-from scaling_curve_evaluator import PolicyEmbeddingSimilarityEvaluator
+from src.scaling_curve_evaluator import PolicyEmbeddingSimilarityEvaluator
 
 
 def main():

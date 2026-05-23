@@ -6,12 +6,12 @@ import torch
 
 # Maps policy type string (from config.json) to (module_path, class_name)
 _POLICY_REGISTRY: dict[str, tuple[str, str]] = {
-    "act": ("lerobot.common.policies.act.modeling_act", "ACTPolicy"),
-    "diffusion": ("lerobot.common.policies.diffusion.modeling_diffusion", "DiffusionPolicy"),
-    "pi0": ("lerobot.common.policies.pi0.modeling_pi0", "PI0Policy"),
-    "pi0fast": ("lerobot.common.policies.pi0fast.modeling_pi0fast", "PI0FastPolicy"),
-    "tdmpc": ("lerobot.common.policies.tdmpc.modeling_tdmpc", "TDMPCPolicy"),
-    "vqbet": ("lerobot.common.policies.vqbet.modeling_vqbet", "VQBeTPolicy"),
+    "act": ("lerobot.policies.act.modeling_act", "ACTPolicy"),
+    "diffusion": ("lerobot.policies.diffusion.modeling_diffusion", "DiffusionPolicy"),
+    "pi0": ("lerobot.policies.pi0.modeling_pi0", "PI0Policy"),
+    "pi0fast": ("lerobot.policies.pi0fast.modeling_pi0fast", "PI0FastPolicy"),
+    "tdmpc": ("lerobot.policies.tdmpc.modeling_tdmpc", "TDMPCPolicy"),
+    "vqbet": ("lerobot.policies.vqbet.modeling_vqbet", "VQBeTPolicy"),
 }
 
 
@@ -79,6 +79,11 @@ class PolicyEmbeddingExtractor:
         def _hook(mod, inp, output):
             if isinstance(output, torch.Tensor):
                 self._hook_outputs.append(output.detach().cpu())
+            elif isinstance(output, dict):
+                # IntermediateLayerGetter returns OrderedDict {layer_name: tensor}
+                vals = [v for v in output.values() if isinstance(v, torch.Tensor)]
+                if vals:
+                    self._hook_outputs.append(vals[-1].detach().cpu())
             elif isinstance(output, (tuple, list)) and len(output) > 0:
                 first = output[0]
                 if isinstance(first, torch.Tensor):
