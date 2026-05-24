@@ -100,3 +100,38 @@ class ScalingCurveGenerator:
             self._results.append((n, score))
 
         return self._results
+
+    def plot(self, save_path: str | None = None, show: bool = False) -> None:
+        """Plot the scaling curve.
+
+        Args:
+            save_path: If given, save the figure to this path (PNG). Parent
+                directories are created automatically.
+            show: If True, display an interactive matplotlib window.
+        """
+        if self._results is None:
+            raise RuntimeError(
+                "请先调用 generate() 再调用 plot()。"
+            )
+
+        import matplotlib.pyplot as plt
+
+        xs = [r[0] for r in self._results]
+        ys = [r[1] for r in self._results]
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.plot(xs, ys, marker="o", linewidth=2, markersize=5)
+        ax.set_xlabel("Training episodes")
+        ax.set_ylabel("c̄_π")
+        ax.set_title("Policy Embedding Similarity — Scaling Curve")
+        ax.grid(True, linestyle="--", alpha=0.5)
+
+        if save_path is not None:
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=150, bbox_inches="tight")
+            print(f"Saved: {save_path}")
+
+        if show:
+            plt.show()
+
+        plt.close(fig)

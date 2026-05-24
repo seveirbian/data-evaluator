@@ -46,3 +46,27 @@ def test_generate_returns_correct_structure(MockLoader, MockExtractor):
     assert isinstance(n, int)
     assert isinstance(score, float)
     assert results[-1][0] == 5  # 最后一点必须是 n_total
+
+
+import pytest
+
+
+def _generator_with_results(results):
+    """Bypass __init__ and inject results directly."""
+    gen = object.__new__(ScalingCurveGenerator)
+    gen._results = results
+    return gen
+
+
+def test_plot_raises_if_generate_not_called():
+    gen = object.__new__(ScalingCurveGenerator)
+    gen._results = None
+    with pytest.raises(RuntimeError, match="generate"):
+        gen.plot()
+
+
+def test_plot_saves_file(tmp_path):
+    gen = _generator_with_results([(1, 0.4), (5, 0.7), (10, 1.0)])
+    save_path = tmp_path / "subdir" / "curve.png"
+    gen.plot(save_path=str(save_path))
+    assert save_path.exists()
