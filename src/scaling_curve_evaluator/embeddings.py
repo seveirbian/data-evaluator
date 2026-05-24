@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 
-# Maps policy type string (from config.json) to (module_path, class_name)
+# Maps policy type (from config.json) to (module_path, class_name)
 _POLICY_REGISTRY: dict[str, tuple[str, str]] = {
     "act": ("lerobot.policies.act.modeling_act", "ACTPolicy"),
     "diffusion": ("lerobot.policies.diffusion.modeling_diffusion", "DiffusionPolicy"),
@@ -15,20 +15,13 @@ _POLICY_REGISTRY: dict[str, tuple[str, str]] = {
 }
 
 
-def _resolve_device(device: str) -> torch.device:
-    if device == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(device)
-
-
-def _flatten_embedding(t: torch.Tensor) -> torch.Tensor:
-    """Reduce any shaped tensor to a 1-D or 2-D [N, D] vector."""
+def _flatten(t: torch.Tensor) -> torch.Tensor:
+    """Reduce any tensor to [N, D] via global average pooling."""
     if t.dim() <= 2:
         return t
-    elif t.dim() == 3:
+    if t.dim() == 3:
         return t.mean(dim=1)  # [B, seq, D] -> [B, D]
-    else:
-        return t.mean(dim=list(range(2, t.dim())))  # [B, C, H, W] -> [B, C]
+    return t.mean(dim=list(range(2, t.dim())))  # [B, C, H, W] -> [B, C]
 
 
 class PolicyEmbeddingExtractor:
@@ -36,40 +29,30 @@ class PolicyEmbeddingExtractor:
 
     Args:
         policy_dir: Path to directory containing config.json + weights.
-        hook_module: Dotted attribute path to the module to hook, e.g. "model.backbone".
-            Common values:
-                ACT             -> "model.backbone"
-                DiffusionPolicy -> "model.obs_encoder"
-                Pi0             -> "model.paligemma_with_expert.paligemma.vision_tower"
+        hook_module: Dotted attribute path to the module to hook.
+            ACT             -> "model.backbone"
+            DiffusionPolicy -> "model.obs_encoder"
+            Pi0             -> "model.paligemma_with_expert.paligemma.vision_tower"
         device: "auto", "cpu", "cuda", or "cuda:N".
     """
 
     def __init__(self, policy_dir: str, hook_module: str, device: str = "auto"):
-        self.device = _resolve_device(device)
+        if device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device(device)
         self.policy = self._load_policy(Path(policy_dir))
         self.policy.eval().to(self.device)
         self._hook_outputs: list[torch.Tensor] = []
         self._hook_handle = self._register_hook(hook_module)
 
-    # ------------------------------------------------------------------
-    # Setup
-    # ------------------------------------------------------------------
-
     def _load_policy(self, policy_dir: Path):
         config = json.loads((policy_dir / "config.json").read_text())
-        # LeRobot configs typically store type under "type" or "model_type"
         raw_type = config.get("type") or config.get("model_type") or ""
         policy_type = raw_type.lower().replace("config", "").strip("_-")
-
         if policy_type not in _POLICY_REGISTRY:
-            raise ValueError(
-                f"Unsupported policy type '{policy_type}'. "
-                f"Supported: {list(_POLICY_REGISTRY)}"
-            )
-
+            raise ValueError(f"Unsupported policy type '{policy_type}'. Supported: {list(_POLICY_REGISTRY)}")
         module_path, class_name = _POLICY_REGISTRY[policy_type]
-        cls = getattr(importlib.import_module(module_path), class_name)
-        return cls.from_pretrained(str(policy_dir))
+        return getattr(importlib.import_module(module_path), class_name).from_pretrained(str(policy_dir))
 
     def _register_hook(self, module_path: str):
         module = self.policy
@@ -84,32 +67,17 @@ class PolicyEmbeddingExtractor:
                 vals = [v for v in output.values() if isinstance(v, torch.Tensor)]
                 if vals:
                     self._hook_outputs.append(vals[-1].detach().cpu())
-            elif isinstance(output, (tuple, list)) and len(output) > 0:
-                first = output[0]
-                if isinstance(first, torch.Tensor):
-                    self._hook_outputs.append(first.detach().cpu())
+            elif isinstance(output, (tuple, list)) and output:
+                if isinstance(output[0], torch.Tensor):
+                    self._hook_outputs.append(output[0].detach().cpu())
 
         return module.register_forward_hook(_hook)
-
-    # ------------------------------------------------------------------
-    # Extraction
-    # ------------------------------------------------------------------
 
     def extract_per_camera(
         self, observation: dict[str, torch.Tensor], camera_keys: list[str]
     ) -> dict[str, torch.Tensor]:
-        """Run one forward pass and return {camera_key: embedding [D]}.
-
-        The hook fires at `hook_module`. If it fires once per camera image
-        (common for CNN backbones), each output is mapped to the corresponding
-        camera. If it fires once with all cameras batched in the first
-        dimension, the output is split evenly.
-        """
-        batch = {
-            k: v.unsqueeze(0).to(self.device)
-            for k, v in observation.items()
-            if isinstance(v, torch.Tensor)
-        }
+        """Run one forward pass and return {camera_key: embedding [D]}."""
+        batch = {k: v.unsqueeze(0).to(self.device) for k, v in observation.items() if isinstance(v, torch.Tensor)}
 
         self._hook_outputs = []
         with torch.no_grad():
@@ -117,20 +85,16 @@ class PolicyEmbeddingExtractor:
                 self.policy.reset()
             self.policy.select_action(batch)
 
-        outputs = [_flatten_embedding(o) for o in self._hook_outputs]
+        outputs = [_flatten(o) for o in self._hook_outputs]
         n_cams = len(camera_keys)
 
         if len(outputs) == n_cams:
-            # Hook fired once per camera
             return {k: outputs[i].squeeze(0) for i, k in enumerate(camera_keys)}
 
         if len(outputs) == 1:
-            flat = outputs[0]  # [N, D] or [1, D]
+            flat = outputs[0]
             if flat.shape[0] == n_cams:
-                # All cameras batched together in dim-0
                 return {k: flat[i] for i, k in enumerate(camera_keys)}
-            # Single fused embedding — replicate for all cameras so downstream
-            # per-camera similarity still works (will produce identical scores)
             emb = flat.squeeze(0)
             return {k: emb for k in camera_keys}
 
