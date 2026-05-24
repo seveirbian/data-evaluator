@@ -38,8 +38,14 @@ class PolicyEmbeddingExtractor:
 
     def __init__(self, policy_dir: str, hook_module: str, device: str = "auto"):
         if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
         self.device = torch.device(device)
+        self._hook_module = hook_module
         self.policy = self._load_policy(Path(policy_dir))
         self.policy.eval().to(self.device)
         self._hook_outputs: list[torch.Tensor] = []
@@ -87,6 +93,12 @@ class PolicyEmbeddingExtractor:
 
         outputs = [_flatten(o) for o in self._hook_outputs]
         n_cams = len(camera_keys)
+
+        if not outputs:
+            raise RuntimeError(
+                "Hook never fired during forward pass. "
+                f"Check that hook_module '{self._hook_module}' is correct."
+            )
 
         if len(outputs) == n_cams:
             return {k: outputs[i].squeeze(0) for i, k in enumerate(camera_keys)}

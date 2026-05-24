@@ -65,7 +65,7 @@ class PolicyEmbeddingSimilarityEvaluator:
         return {k: torch.stack(vs, dim=0) for k, vs in per_camera.items()}
 
     def evaluate(self) -> float:
-        """Run the full evaluation and return c̄_π ∈ [0, 1]."""
+        """Run the full evaluation and return c̄_π ∈ [-1, 1]."""
         train_obs = self.train_loader.get_initial_observations()
         eval_obs = self.eval_loader.get_initial_observations()
 

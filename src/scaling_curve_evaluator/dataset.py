@@ -36,8 +36,9 @@ class LeRobotDatasetLoader:
         for parquet_path in sorted(self.root.glob("data/**/*.parquet")):
             df = pd.read_parquet(parquet_path)
             for frame_pos in df.index[df["frame_index"] == 0]:
+                frame_idx = int(df.loc[frame_pos, "frame_index"])
                 obs = {
-                    cam: self._load_video_frame_at(self._video_path(parquet_path, cam), frame_pos)
+                    cam: self._load_video_frame_at(self._video_path(parquet_path, cam), frame_idx)
                     for cam in self.camera_keys
                 }
                 row = df.loc[frame_pos]

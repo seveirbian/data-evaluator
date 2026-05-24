@@ -57,7 +57,7 @@ def policy_embedding_similarity(
         eval_embeddings:  {camera_key: [N_eval, D]}
 
     Returns:
-        Scalar c̄_π ∈ [0, 1].
+        Scalar c̄_π ∈ [-1, 1].
     """
     camera_keys = list(train_embeddings.keys())
     if not camera_keys:
@@ -74,11 +74,6 @@ def policy_embedding_similarity(
 
     # Eq. 10 multi-camera: max over cameras
     per_sample_scores = per_camera_scores.max(dim=1).values  # [N_eval]
-
-    # Normalize to [0, 1]
-    lo, hi = per_sample_scores.min(), per_sample_scores.max()
-    if hi > lo:
-        per_sample_scores = (per_sample_scores - lo) / (hi - lo)
 
     # Eq. 11: mean over eval set
     return per_sample_scores.mean().item()
