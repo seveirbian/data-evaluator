@@ -14,7 +14,7 @@ $$c_\pi(x_i, x_j) = \frac{\phi_\pi(x_i) \cdot \phi_\pi(x_j)}{||\phi_\pi(x_i)|| \
 
 $$c_\pi(x_i, D_{\text{train}}) = \max_{x_j \in D_{\text{train}}} c_\pi(x_i, x_j)$$
 
-**Eq. 11** — 归一化后对所有 eval 样本取均值，得到最终指标：
+**Eq. 11** — 对所有 eval 样本取均值，得到最终指标：
 
 $$\bar{c}_\pi = \sum_{x_i \in D_{\text{eval}}} \frac{c(x_i, D_{\text{train}})}{|D_{\text{eval}}|}$$
 
@@ -22,77 +22,32 @@ $\bar{c}_\pi$ 越高，说明训练数据对 eval 环境的覆盖越好，policy
 
 ---
 
+## 使用前提与限制
+
+使用本工具前，请确认以下条件均满足：
+
+| 限制 | 说明 |
+|------|------|
+| **LeRobot v3.0 格式** | 数据集必须是 LeRobot v3.0 格式（Parquet + MP4 + `meta/info.json`）。 |
+| **Policy 与数据同构** | Policy 的 `input_shapes`（关节数、状态维度）必须与数据集匹配。用 6-DOF 机器人训练的 policy 无法处理 14-DOF 机器人的数据，forward pass 会报 shape 错误。 |
+| **相机视角有交集** | Train 和 eval 数据集至少共享一个相机视角（物理视角相同）。不同命名可通过 `camera_key_map` 处理，但不能替代真实的视角对应。 |
+| **只使用初始帧** | 每个 episode 只取 `frame_index == 0` 的帧。指标反映的是初始状态的视觉覆盖，不涵盖轨迹中间帧的分布。 |
+| **多曲线须用同一 Policy** | `MultiScalingCurveGenerator` 支持多条曲线对比，但不同曲线若使用不同 policy，embedding 空间不同，分数不可直接横向比较。 |
+| **支持的 Policy 类型** | 仅支持 ACT、DiffusionPolicy、Pi0、Pi0Fast、TDMPC、VQBeT（`lerobot==0.4.0`）。 |
+| **hook_module 必须正确** | 填写错误的 `hook_module` 路径不会报错，但会提取语义无意义的 embedding。请参考下方对照表。 |
+
+---
+
 ## 模块结构
 
 ```
 src/scaling_curve_evaluator/
-├── __init__.py
-├── dataset.py      # LeRobot v3.0 数据集加载
-├── embeddings.py   # Policy embedding 提取（forward hook）
-├── similarity.py   # Eq. 9-11 计算
-└── evaluator.py    # 主入口，串联全流程
+├── __init__.py       # 公开 API：ScalingCurveGenerator, MultiScalingCurveGenerator
+├── scaling_curve.py  # 公开类实现
+├── _dataset.py       # 内部：LeRobot v3.0 数据加载
+├── _embeddings.py    # 内部：Policy embedding 提取（forward hook）
+└── _similarity.py    # 内部：Eq. 9-11 余弦相似度计算
 ```
-
-### `dataset.py` — LeRobotDatasetLoader
-
-从 LeRobot v3.0 格式数据集中提取每个 episode 的**初始观测**（`frame_index == 0`）。
-
-论文说明只需初始帧，不需要完整轨迹，因此不必在真机上 roll out。
-
-**LeRobot v3.0 数据格式：**
-```
-{dataset}/
-  meta/info.json                              # 数据集元信息（fps、features 等）
-  data/chunk-000/file-000.parquet             # state/action 数据，行号 = 帧号
-  videos/{cam_key}/chunk-000/file-000.mp4    # 对应视频，帧顺序与 parquet 一致
-```
-
-图像通过 `PyAV` seek 到目标时间戳后读取第一帧，避免逐帧遍历。
-
-### `embeddings.py` — PolicyEmbeddingExtractor
-
-通过 **PyTorch forward hook** 拦截 policy 的 vision encoder 输出，提取每个观测的 embedding。
-
-支持的 LeRobot policy（`lerobot==0.4.0`）：
-
-| Policy | `hook_module` |
-|--------|--------------|
-| ACT | `model.backbone` |
-| DiffusionPolicy | `model.obs_encoder` |
-| Pi0 | `model.paligemma_with_expert.paligemma.vision_tower` |
-| Pi0Fast | `model.paligemma_with_expert.paligemma.vision_tower` |
-| TDMPC | `model.encoder` |
-| VQBeT | `model.obs_encoder` |
-
-**多相机 embedding 解析逻辑：**
-- Hook 触发 N 次（每个相机一次）→ 按顺序映射到 camera_key
-- Hook 触发 1 次，输出 shape[0] == N_cams → 拆分
-- Hook 触发 1 次，单一 embedding → 复制给所有相机（产生相同分数）
-
-**支持的 hook 输出类型：**
-- `torch.Tensor` → 直接使用
-- `dict`（如 `IntermediateLayerGetter` 的 `OrderedDict`）→ 取最后一个值
-- `tuple/list` → 取第一个元素
-
-任意维度的 tensor 通过 global average pooling 压缩为 `[N, D]`。
-
-### `similarity.py` — 相似度计算
-
-实现论文 Eq. 9-11，多相机扩展策略：
-
-```
-对每个 eval 样本 x_i：
-  for 每个相机 k：
-    score_k = max_{x_j ∈ D_train} cosine_sim(φ^k(x_i), φ^k(x_j))   # Eq. 10
-  score_i = max_k score_k    # 任意相机被覆盖即算匹配
-
-归一化 score_i 到 [0, 1]
-c̄_π = mean(score_i)         # Eq. 11
-```
-
-### `evaluator.py` — PolicyEmbeddingSimilarityEvaluator
-
-串联以上三个模块的主类，只暴露一个 `evaluate()` 方法。
 
 ---
 
@@ -118,35 +73,82 @@ project/
 └── main.py
 ```
 
-### 运行
+### 单条 Scaling Curve
 
 ```python
-from src.scaling_curve_evaluator import PolicyEmbeddingSimilarityEvaluator
+from src.scaling_curve_evaluator import ScalingCurveGenerator
 
-evaluator = PolicyEmbeddingSimilarityEvaluator(
+gen = ScalingCurveGenerator(
     policy_dir="policy/my_policy",
     train_data_dir="data/train/dataset_name",
     eval_data_dir="data/eval/dataset_name",
-    hook_module="model.backbone",  # 根据 policy 类型选择，见上表
+    hook_module="model.backbone",  # 根据 policy 类型选择，见下表
     device="auto",                 # 自动选择 cuda / mps / cpu
+    num_points=20,                 # scaling curve 采样点数
 )
-score = evaluator.evaluate()
-print(f"c̄_π = {score:.4f}")
+gen.generate()
+gen.plot(save_path="curve.png", show=True)
 ```
 
-```bash
-uv run main.py
+### 多数据集对比（同一 Policy）
+
+```python
+from src.scaling_curve_evaluator import MultiScalingCurveGenerator
+
+gen = MultiScalingCurveGenerator(
+    eval_data_dir="data/eval/dataset_name",
+    curves=[
+        {
+            "policy_dir": "policy/my_policy",
+            "train_data_dir": "data/train/batch1",
+            "hook_module": "model.backbone",
+        },
+        {
+            "policy_dir": "policy/my_policy",
+            "train_data_dir": "data/train/batch2",
+            "hook_module": "model.backbone",
+        },
+    ],
+    device="auto",
+    num_points=20,
+)
+gen.generate_all()
+gen.plot(save_path="multi_curve.png", show=True)
+```
+
+### 相机键映射（train/eval 命名不一致时）
+
+```python
+curves=[
+    {
+        "policy_dir": "policy/my_policy",
+        "train_data_dir": "data/train/batch1",
+        "hook_module": "model.backbone",
+        "camera_key_map": {
+            "observation.images.right_wrist": "observation.images.front",
+        },
+    },
+]
 ```
 
 ---
 
 ## 确定 hook_module
 
-如果不确定用哪个模块，运行以下命令查看 policy 结构：
+| Policy | `hook_module` |
+|--------|--------------|
+| ACT | `model.backbone` |
+| DiffusionPolicy | `model.obs_encoder` |
+| Pi0 | `model.paligemma_with_expert.paligemma.vision_tower` |
+| Pi0Fast | `model.paligemma_with_expert.paligemma.vision_tower` |
+| TDMPC | `model.encoder` |
+| VQBeT | `model.obs_encoder` |
+
+如果不确定，运行以下命令查看 policy 结构：
 
 ```bash
 uv run python -c "
-from src.scaling_curve_evaluator.embeddings import _POLICY_REGISTRY
+from src.scaling_curve_evaluator._embeddings import _POLICY_REGISTRY
 import importlib, json
 config = json.load(open('policy/my_policy/config.json'))
 policy_type = config.get('type','').lower().replace('config','').strip('_-')
@@ -168,3 +170,4 @@ print(p)
 - `av`（视频解码）
 - `pandas`（parquet 读取）
 - `tqdm`
+- `matplotlib`
