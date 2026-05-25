@@ -62,21 +62,26 @@ class ScalingCurveGenerator:
         hook_module: str,
         device: str = "auto",
         num_points: int = 20,
+        camera_key_map: dict[str, str] | None = None,
     ):
         self.num_points = num_points
+        self._camera_key_map: dict[str, str] = camera_key_map or {}
         self.extractor = PolicyEmbeddingExtractor(policy_dir, hook_module, device)
 
         train_loader = LeRobotDatasetLoader(train_data_dir)
         eval_loader = LeRobotDatasetLoader(eval_data_dir)
 
-        self.camera_keys = sorted(
-            set(train_loader.camera_keys) & set(eval_loader.camera_keys)
-        )
+        # Map train camera keys to eval space, then intersect
+        mapped_train_keys = {
+            self._camera_key_map.get(k, k) for k in train_loader.camera_keys
+        }
+        self.camera_keys = sorted(mapped_train_keys & set(eval_loader.camera_keys))
         if not self.camera_keys:
             raise ValueError(
                 "No common camera keys between train and eval datasets.\n"
                 f"  Train cameras: {train_loader.camera_keys}\n"
-                f"  Eval  cameras: {eval_loader.camera_keys}"
+                f"  Eval  cameras: {eval_loader.camera_keys}\n"
+                f"  camera_key_map: {self._camera_key_map or '(none)'}"
             )
 
         self._train_obs = train_loader.get_initial_observations()
@@ -88,6 +93,15 @@ class ScalingCurveGenerator:
         # Pre-compute eval embeddings once — reused for every scaling step
         self._eval_embs = self._extract_embeddings(eval_obs, "Eval embeddings")
         self._results: list[tuple[int, float]] | None = None
+
+    def _remap_train_obs(self, observations: list[dict]) -> list[dict]:
+        """Rename train observation camera keys to eval camera key space."""
+        if not self._camera_key_map:
+            return observations
+        return [
+            {self._camera_key_map.get(k, k): v for k, v in obs.items()}
+            for obs in observations
+        ]
 
     def _extract_embeddings(
         self, observations: list[dict], desc: str
@@ -105,8 +119,11 @@ class ScalingCurveGenerator:
         n_total = len(self._train_obs)
         steps = _compute_steps(n_total, self.num_points)
 
+        # Remap train observation camera keys to eval space if needed
+        train_obs = self._remap_train_obs(self._train_obs)
+
         # Extract all train embeddings once, then slice per step
-        all_train_embs = self._extract_embeddings(self._train_obs, "Train embeddings")
+        all_train_embs = self._extract_embeddings(train_obs, "Train embeddings")
 
         self._results = []
         for n in tqdm(steps, desc="Scaling curve", unit="step"):
@@ -199,6 +216,7 @@ class MultiScalingCurvePlotter:
                 hook_module=c["hook_module"],
                 device=device,
                 num_points=num_points,
+                camera_key_map=c.get("camera_key_map"),
             )
             for c in curves
         ]
