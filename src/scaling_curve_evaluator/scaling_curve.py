@@ -52,6 +52,20 @@ class ScalingCurveGenerator:
         )
         gen.generate()
         gen.plot(save_path="curve.png", show=True)
+
+    Limitations:
+        - **Dataset format**: Only LeRobot v3.0 format (Parquet + MP4 + meta/info.json).
+        - **Robot morphology**: The policy's input_shapes (joint count, state dim) must
+          match the dataset. A policy trained on a 6-DOF robot cannot process data from
+          a 14-DOF robot and will raise a RuntimeError during forward pass.
+        - **Camera overlap**: Train and eval datasets must share at least one camera
+          viewpoint. Use camera_key_map to handle different naming conventions.
+        - **Initial frame only**: Only frame_index == 0 is used per episode. The metric
+          reflects coverage of initial states, not full trajectory distributions.
+        - **hook_module accuracy**: Providing the wrong hook_module path will not raise
+          an error but will produce semantically meaningless embeddings.
+        - **Supported policies**: ACT, DiffusionPolicy, Pi0, Pi0Fast, TDMPC, VQBeT
+          (lerobot==0.4.0). Other policies require extending _POLICY_REGISTRY.
     """
 
     def __init__(
@@ -195,6 +209,13 @@ class MultiScalingCurveGenerator:
         )
         plotter.generate_all()
         plotter.plot(save_path="multi_curve.png", show=True)
+
+    Limitations (in addition to ScalingCurveGenerator's limitations):
+        - **Cross-curve comparability**: Curves are only directly comparable if they use
+          the same policy. Different policies produce embeddings in different spaces;
+          comparing their c̄_π scores has no meaningful interpretation.
+        - **Shared eval dataset**: All curves use the same eval_data_dir. The eval set
+          must be compatible (camera overlap, format) with every train dataset listed.
     """
 
     def __init__(
