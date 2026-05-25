@@ -159,3 +159,51 @@ class ScalingCurveGenerator:
             plt.show()
 
         plt.close(fig)
+
+
+class MultiScalingCurvePlotter:
+    """Plot multiple scaling curves on the same figure.
+
+    Each curve corresponds to one (policy, train_data_dir) combination.
+    A shared eval_data_dir is used for all curves.
+
+    Usage::
+
+        plotter = MultiScalingCurvePlotter(
+            eval_data_dir="data/eval/dataset",
+            curves=[
+                {"policy_dir": "policy/act", "train_data_dir": "data/train/batch1", "hook_module": "model.backbone"},
+                {"policy_dir": "policy/pi0", "train_data_dir": "data/train/batch2", "hook_module": "model.vision_tower"},
+            ],
+        )
+        plotter.generate_all()
+        plotter.plot(save_path="multi_curve.png", show=True)
+    """
+
+    def __init__(
+        self,
+        eval_data_dir: str,
+        curves: list[dict],
+        device: str = "auto",
+        num_points: int = 20,
+    ):
+        if not curves:
+            raise ValueError("curves 列表不能为空。")
+
+        self._labels = _infer_labels(curves)
+        self._generators = [
+            ScalingCurveGenerator(
+                policy_dir=c["policy_dir"],
+                train_data_dir=c["train_data_dir"],
+                eval_data_dir=eval_data_dir,
+                hook_module=c["hook_module"],
+                device=device,
+                num_points=num_points,
+            )
+            for c in curves
+        ]
+
+    def generate_all(self) -> None:
+        """Run generate() for each curve."""
+        for gen in self._generators:
+            gen.generate()

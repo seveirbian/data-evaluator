@@ -91,3 +91,25 @@ def test_infer_labels_collision():
     ]
     labels = _infer_labels(curves)
     assert labels == ["batch1/act", "batch1/pi0"]
+
+
+from src.scaling_curve_evaluator.scaling_curve import MultiScalingCurvePlotter
+
+
+def test_multi_plotter_empty_curves_raises():
+    with pytest.raises(ValueError, match="curves"):
+        MultiScalingCurvePlotter(eval_data_dir="e", curves=[])
+
+
+@patch("src.scaling_curve_evaluator.scaling_curve.ScalingCurveGenerator")
+def test_generate_all_calls_each_generator(MockGen):
+    MockGen.return_value.generate.return_value = [(1, 0.5), (5, 0.9)]
+    plotter = MultiScalingCurvePlotter(
+        eval_data_dir="e",
+        curves=[
+            {"policy_dir": "p1", "train_data_dir": "t1", "hook_module": "m"},
+            {"policy_dir": "p2", "train_data_dir": "t2", "hook_module": "m"},
+        ],
+    )
+    plotter.generate_all()
+    assert MockGen.return_value.generate.call_count == 2
