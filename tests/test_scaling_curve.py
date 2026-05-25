@@ -113,3 +113,38 @@ def test_generate_all_calls_each_generator(MockGen):
     )
     plotter.generate_all()
     assert MockGen.return_value.generate.call_count == 2
+
+
+def _multi_plotter_with_results(results_list, labels):
+    """Bypass __init__, inject generators with results directly."""
+    plotter = object.__new__(MultiScalingCurvePlotter)
+    plotter._labels = labels
+    plotter._generators = []
+    for results in results_list:
+        gen = object.__new__(ScalingCurveGenerator)
+        gen._results = results
+        plotter._generators.append(gen)
+    return plotter
+
+
+def test_multi_plot_raises_if_generate_not_called():
+    plotter = object.__new__(MultiScalingCurvePlotter)
+    plotter._labels = ["a"]
+    gen = object.__new__(ScalingCurveGenerator)
+    gen._results = None
+    plotter._generators = [gen]
+    with pytest.raises(RuntimeError, match="generate"):
+        plotter.plot()
+
+
+def test_multi_plot_saves_file(tmp_path):
+    plotter = _multi_plotter_with_results(
+        results_list=[
+            [(1, 0.4), (5, 0.7), (10, 1.0)],
+            [(1, 0.3), (5, 0.6), (10, 0.9)],
+        ],
+        labels=["batch1", "batch2"],
+    )
+    save_path = tmp_path / "multi_curve.png"
+    plotter.plot(save_path=str(save_path))
+    assert save_path.exists()

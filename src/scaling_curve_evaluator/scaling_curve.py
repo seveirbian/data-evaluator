@@ -207,3 +207,50 @@ class MultiScalingCurvePlotter:
         """Run generate() for each curve."""
         for gen in self._generators:
             gen.generate()
+
+    def plot(self, save_path: str | None = None, show: bool = False) -> None:
+        """Plot all scaling curves on the same figure.
+
+        Args:
+            save_path: If given, save the figure to this path (PNG). Parent
+                directories are created automatically.
+            show: If True, display an interactive matplotlib window.
+        """
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(9, 6))
+
+        for gen, label in zip(self._generators, self._labels):
+            if gen._results is None:
+                raise RuntimeError(
+                    f"Curve '{label}' 未生成数据，请先调用 generate_all()。"
+                )
+            xs = [r[0] for r in gen._results]
+            ys = [r[1] for r in gen._results]
+            (line,) = ax.plot(xs, ys, marker="o", linewidth=2, markersize=5, label=label)
+            for x, y in zip(xs, ys):
+                ax.annotate(
+                    f"{y:.3f}",
+                    xy=(x, y),
+                    xytext=(0, 8),
+                    textcoords="offset points",
+                    ha="center",
+                    fontsize=7,
+                    color=line.get_color(),
+                )
+
+        ax.set_xlabel("Training episodes")
+        ax.set_ylabel("c̄_π")
+        ax.set_title("Policy Embedding Similarity — Scaling Curves")
+        ax.legend()
+        ax.grid(True, linestyle="--", alpha=0.5)
+
+        if save_path is not None:
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(save_path, dpi=150, bbox_inches="tight")
+            print(f"Saved: {save_path}")
+
+        if show:
+            plt.show()
+
+        plt.close(fig)
