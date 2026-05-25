@@ -70,3 +70,24 @@ def test_plot_saves_file(tmp_path):
     save_path = tmp_path / "subdir" / "curve.png"
     gen.plot(save_path=str(save_path))
     assert save_path.exists()
+
+
+from src.scaling_curve_evaluator.scaling_curve import _infer_labels
+
+
+def test_infer_labels_no_collision():
+    curves = [
+        {"policy_dir": "policy/act", "train_data_dir": "data/train/batch1", "hook_module": "m"},
+        {"policy_dir": "policy/pi0", "train_data_dir": "data/train/batch2", "hook_module": "m"},
+    ]
+    labels = _infer_labels(curves)
+    assert labels == ["batch1", "batch2"]
+
+
+def test_infer_labels_collision():
+    curves = [
+        {"policy_dir": "policy/act", "train_data_dir": "data/train/batch1", "hook_module": "m"},
+        {"policy_dir": "policy/pi0", "train_data_dir": "data/train/batch1", "hook_module": "m"},
+    ]
+    labels = _infer_labels(curves)
+    assert labels == ["batch1/act", "batch1/pi0"]

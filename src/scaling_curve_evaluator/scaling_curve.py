@@ -21,6 +21,21 @@ def _compute_steps(n_total: int, num_points: int) -> list[int]:
     return np.unique(raw.round().astype(int)).tolist()
 
 
+def _infer_labels(curves: list[dict]) -> list[str]:
+    """Infer display labels from curve configs.
+
+    Uses train_data_dir basename by default.
+    If duplicates exist, appends policy_dir basename to disambiguate.
+    """
+    labels = [Path(c["train_data_dir"]).name for c in curves]
+    if len(set(labels)) < len(labels):
+        labels = [
+            f"{Path(c['train_data_dir']).name}/{Path(c['policy_dir']).name}"
+            for c in curves
+        ]
+    return labels
+
+
 class ScalingCurveGenerator:
     """Generate and plot a scaling curve of c̄_π vs training episodes.
 
