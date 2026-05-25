@@ -1,6 +1,6 @@
-from .scaling_curve import MultiScalingCurvePlotter, ScalingCurveGenerator
+from .scaling_curve import MultiScalingCurveGenerator, ScalingCurveGenerator
 
 __all__ = [
     "ScalingCurveGenerator",
-    "MultiScalingCurvePlotter",
+    "MultiScalingCurveGenerator",
 ]

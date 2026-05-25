@@ -178,7 +178,7 @@ class ScalingCurveGenerator:
         plt.close(fig)
 
 
-class MultiScalingCurvePlotter:
+class MultiScalingCurveGenerator:
     """Plot multiple scaling curves on the same figure.
 
     Each curve corresponds to one (policy, train_data_dir) combination.
@@ -186,7 +186,7 @@ class MultiScalingCurvePlotter:
 
     Usage::
 
-        plotter = MultiScalingCurvePlotter(
+        plotter = MultiScalingCurveGenerator(
             eval_data_dir="data/eval/dataset",
             curves=[
                 {"policy_dir": "policy/act", "train_data_dir": "data/train/batch1", "hook_module": "model.backbone"},

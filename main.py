@@ -1,8 +1,8 @@
-from src.scaling_curve_evaluator import MultiScalingCurvePlotter
+from src.scaling_curve_evaluator import MultiScalingCurveGenerator
 
 
 def main():
-    plotter = MultiScalingCurvePlotter(
+    plotter = MultiScalingCurveGenerator(
         eval_data_dir="example/data/eval/Task-GrabCuicuishaPlaceMatting-30",
         curves=[
             {

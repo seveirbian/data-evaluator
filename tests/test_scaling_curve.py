@@ -93,18 +93,18 @@ def test_infer_labels_collision():
     assert labels == ["batch1/act", "batch1/pi0"]
 
 
-from src.scaling_curve_evaluator.scaling_curve import MultiScalingCurvePlotter
+from src.scaling_curve_evaluator.scaling_curve import MultiScalingCurveGenerator
 
 
 def test_multi_plotter_empty_curves_raises():
     with pytest.raises(ValueError, match="curves"):
-        MultiScalingCurvePlotter(eval_data_dir="e", curves=[])
+        MultiScalingCurveGenerator(eval_data_dir="e", curves=[])
 
 
 @patch("src.scaling_curve_evaluator.scaling_curve.ScalingCurveGenerator")
 def test_generate_all_calls_each_generator(MockGen):
     MockGen.return_value.generate.return_value = [(1, 0.5), (5, 0.9)]
-    plotter = MultiScalingCurvePlotter(
+    plotter = MultiScalingCurveGenerator(
         eval_data_dir="e",
         curves=[
             {"policy_dir": "p1", "train_data_dir": "t1", "hook_module": "m"},
@@ -117,7 +117,7 @@ def test_generate_all_calls_each_generator(MockGen):
 
 def _multi_plotter_with_results(results_list, labels):
     """Bypass __init__, inject generators with results directly."""
-    plotter = object.__new__(MultiScalingCurvePlotter)
+    plotter = object.__new__(MultiScalingCurveGenerator)
     plotter._labels = labels
     plotter._generators = []
     for results in results_list:
@@ -128,7 +128,7 @@ def _multi_plotter_with_results(results_list, labels):
 
 
 def test_multi_plot_raises_if_generate_not_called():
-    plotter = object.__new__(MultiScalingCurvePlotter)
+    plotter = object.__new__(MultiScalingCurveGenerator)
     plotter._labels = ["a"]
     gen = object.__new__(ScalingCurveGenerator)
     gen._results = None
