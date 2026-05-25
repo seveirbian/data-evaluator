@@ -8,10 +8,10 @@ def main():
         eval_data_dir="example/data/eval/Task-GrabCuicuishaPlaceMatting-30",
         hook_module="model.backbone",
         device="auto",
-        num_points=20,
+        num_points=10,
     )
     gen.generate()
-    gen.plot(save_path="scaling_curve.png", show=False)
+    gen.plot(save_path="scaling_curve.png", show=True)
     print("Done. Saved to scaling_curve.png")
 
 

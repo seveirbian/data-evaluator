@@ -121,6 +121,15 @@ class ScalingCurveGenerator:
 
         fig, ax = plt.subplots(figsize=(8, 5))
         ax.plot(xs, ys, marker="o", linewidth=2, markersize=5)
+        for x, y in zip(xs, ys):
+            ax.annotate(
+                f"{y:.3f}",
+                xy=(x, y),
+                xytext=(0, 8),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+            )
         ax.set_xlabel("Training episodes")
         ax.set_ylabel("c̄_π")
         ax.set_title("Policy Embedding Similarity — Scaling Curve")
