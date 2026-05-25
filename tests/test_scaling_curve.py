@@ -1,4 +1,4 @@
-from src.scaling_curve_evaluator.scaling_curve import _compute_steps
+from src.scaling_curve.scaling_curve import _compute_steps
 
 
 def test_compute_steps_bounds():
@@ -17,15 +17,15 @@ def test_compute_steps_deduplication():
 
 import torch
 from unittest.mock import patch
-from src.scaling_curve_evaluator.scaling_curve import ScalingCurveGenerator
+from src.scaling_curve.scaling_curve import ScalingCurveGenerator
 
 
 def _make_obs(n: int) -> list[dict]:
     return [{"cam": torch.zeros(3, 4, 4)} for _ in range(n)]
 
 
-@patch("src.scaling_curve_evaluator.scaling_curve.PolicyEmbeddingExtractor")
-@patch("src.scaling_curve_evaluator.scaling_curve.LeRobotDatasetLoader")
+@patch("src.scaling_curve.scaling_curve.PolicyEmbeddingExtractor")
+@patch("src.scaling_curve.scaling_curve.LeRobotDatasetLoader")
 def test_generate_returns_correct_structure(MockLoader, MockExtractor):
     # train: 5 episodes, eval: 2 episodes
     MockLoader.return_value.camera_keys = ["cam"]
@@ -72,7 +72,7 @@ def test_plot_saves_file(tmp_path):
     assert save_path.exists()
 
 
-from src.scaling_curve_evaluator.scaling_curve import _infer_labels
+from src.scaling_curve.scaling_curve import _infer_labels
 
 
 def test_infer_labels_no_collision():
@@ -93,7 +93,7 @@ def test_infer_labels_collision():
     assert labels == ["batch1/act", "batch1/pi0"]
 
 
-from src.scaling_curve_evaluator.scaling_curve import MultiScalingCurveGenerator
+from src.scaling_curve.scaling_curve import MultiScalingCurveGenerator
 
 
 def test_multi_plotter_empty_curves_raises():
@@ -101,7 +101,7 @@ def test_multi_plotter_empty_curves_raises():
         MultiScalingCurveGenerator(eval_data_dir="e", curves=[])
 
 
-@patch("src.scaling_curve_evaluator.scaling_curve.ScalingCurveGenerator")
+@patch("src.scaling_curve.scaling_curve.ScalingCurveGenerator")
 def test_generate_all_calls_each_generator(MockGen):
     MockGen.return_value.generate.return_value = [(1, 0.5), (5, 0.9)]
     plotter = MultiScalingCurveGenerator(

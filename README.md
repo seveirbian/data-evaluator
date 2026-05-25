@@ -41,7 +41,7 @@ $\bar{c}_\pi$ 越高，说明训练数据对 eval 环境的覆盖越好，policy
 ## 模块结构
 
 ```
-src/scaling_curve_evaluator/
+src/scaling_curve/
 ├── __init__.py       # 公开 API：ScalingCurveGenerator, MultiScalingCurveGenerator
 ├── scaling_curve.py  # 公开类实现
 ├── _dataset.py       # 内部：LeRobot v3.0 数据加载
@@ -76,7 +76,7 @@ project/
 ### 单条 Scaling Curve
 
 ```python
-from src.scaling_curve_evaluator import ScalingCurveGenerator
+from src.scaling_curve import ScalingCurveGenerator
 
 gen = ScalingCurveGenerator(
     policy_dir="policy/my_policy",
@@ -93,7 +93,7 @@ gen.plot(save_path="curve.png", show=True)
 ### 多数据集对比（同一 Policy）
 
 ```python
-from src.scaling_curve_evaluator import MultiScalingCurveGenerator
+from src.scaling_curve import MultiScalingCurveGenerator
 
 gen = MultiScalingCurveGenerator(
     eval_data_dir="data/eval/dataset_name",
@@ -148,7 +148,7 @@ curves=[
 
 ```bash
 uv run python -c "
-from src.scaling_curve_evaluator._embeddings import _POLICY_REGISTRY
+from src.scaling_curve._embeddings import _POLICY_REGISTRY
 import importlib, json
 config = json.load(open('policy/my_policy/config.json'))
 policy_type = config.get('type','').lower().replace('config','').strip('_-')

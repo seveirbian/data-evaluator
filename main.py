@@ -1,4 +1,4 @@
-from src.scaling_curve_evaluator import MultiScalingCurveGenerator
+from src.scaling_curve import MultiScalingCurveGenerator
 
 
 def main():
