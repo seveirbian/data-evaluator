@@ -20,3 +20,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/scaling_curve"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/scaling_curve/tests"]
+pythonpath = ["."]
