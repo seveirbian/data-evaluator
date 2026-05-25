@@ -6,9 +6,9 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from .dataset import LeRobotDatasetLoader
-from .embeddings import PolicyEmbeddingExtractor
-from .similarity import policy_embedding_similarity
+from ._dataset import LeRobotDatasetLoader
+from ._embeddings import PolicyEmbeddingExtractor
+from ._similarity import policy_embedding_similarity
 
 
 def _compute_steps(n_total: int, num_points: int) -> list[int]:
