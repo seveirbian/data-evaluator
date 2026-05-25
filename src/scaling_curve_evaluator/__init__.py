@@ -1,4 +1,8 @@
 from .evaluator import PolicyEmbeddingSimilarityEvaluator
-from .scaling_curve import ScalingCurveGenerator
+from .scaling_curve import MultiScalingCurvePlotter, ScalingCurveGenerator
 
-__all__ = ["PolicyEmbeddingSimilarityEvaluator", "ScalingCurveGenerator"]
+__all__ = [
+    "PolicyEmbeddingSimilarityEvaluator",
+    "ScalingCurveGenerator",
+    "MultiScalingCurvePlotter",
+]
