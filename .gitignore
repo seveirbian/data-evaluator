@@ -1,6 +1,9 @@
 # Output files
 *.png
 
+# Example data (large files, not committed)
+example/
+
 # macOS
 .DS_Store
 
