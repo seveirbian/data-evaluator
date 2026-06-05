@@ -10,6 +10,7 @@ _POLICY_REGISTRY: dict[str, tuple[str, str]] = {
     "diffusion": ("lerobot.policies.diffusion.modeling_diffusion", "DiffusionPolicy"),
     "pi0": ("lerobot.policies.pi0.modeling_pi0", "PI0Policy"),
     "pi0fast": ("lerobot.policies.pi0fast.modeling_pi0fast", "PI0FastPolicy"),
+    "pi05": ("lerobot.policies.pi05.modeling_pi05", "PI05Policy"),
     "tdmpc": ("lerobot.policies.tdmpc.modeling_tdmpc", "TDMPCPolicy"),
     "vqbet": ("lerobot.policies.vqbet.modeling_vqbet", "VQBeTPolicy"),
 }
@@ -32,7 +33,7 @@ class PolicyEmbeddingExtractor:
         hook_module: Dotted attribute path to the module to hook.
             ACT             -> "model.backbone"
             DiffusionPolicy -> "model.obs_encoder"
-            Pi0             -> "model.paligemma_with_expert.paligemma.vision_tower"
+            Pi0/Pi05        -> "model.paligemma_with_expert.paligemma.vision_tower"
         device: "auto", "cpu", "cuda", or "cuda:N".
     """
 
