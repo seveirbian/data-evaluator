@@ -64,8 +64,8 @@ class ScalingCurveGenerator:
           reflects coverage of initial states, not full trajectory distributions.
         - **hook_module accuracy**: Providing the wrong hook_module path will not raise
           an error but will produce semantically meaningless embeddings.
-        - **Supported policies**: ACT, DiffusionPolicy, Pi0, Pi0Fast, TDMPC, VQBeT
-          (lerobot==0.4.0). Other policies require extending _POLICY_REGISTRY.
+        - **Supported policies**: ACT, DiffusionPolicy, Pi0, Pi05, Pi0Fast, TDMPC, VQBeT
+          (lerobot>=0.4.0). For openpi models, use OpenPIEmbeddingExtractor directly.
     """
 
     def __init__(
