@@ -33,7 +33,7 @@ $\bar{c}_\pi$ 越高，说明训练数据对 eval 环境的覆盖越好，policy
 | **相机视角有交集** | Train 和 eval 数据集至少共享一个相机视角（物理视角相同）。不同命名可通过 `camera_key_map` 处理，但不能替代真实的视角对应。 |
 | **只使用初始帧** | 每个 episode 只取 `frame_index == 0` 的帧。指标反映的是初始状态的视觉覆盖，不涵盖轨迹中间帧的分布。 |
 | **多曲线须用同一 Policy** | `MultiScalingCurveGenerator` 支持多条曲线对比，但不同曲线若使用不同 policy，embedding 空间不同，分数不可直接横向比较。 |
-| **支持的 Policy 类型** | 仅支持 ACT、DiffusionPolicy、Pi0、Pi0Fast、TDMPC、VQBeT（`lerobot==0.4.0`）。 |
+| **支持的 Policy 类型** | LeRobot policies: ACT、DiffusionPolicy、Pi0、Pi05、Pi0Fast、TDMPC、VQBeT（`lerobot>=0.4.0`）。openpi policies: π₀、π₀.₅（需 `pip install 'data-evaluator[openpi]'`，使用 `OpenPIEmbeddingExtractor`）。 |
 | **hook_module 必须正确** | 填写错误的 `hook_module` 路径不会报错，但会提取语义无意义的 embedding。请参考下方对照表。 |
 
 ---
@@ -143,6 +143,8 @@ curves=[
 | Pi0Fast | `model.paligemma_with_expert.paligemma.vision_tower` |
 | TDMPC | `model.encoder` |
 | VQBeT | `model.obs_encoder` |
+
+**openpi policies**（π₀、π₀.₅）：不通过 `ScalingCurveGenerator` 使用，需直接使用 `OpenPIEmbeddingExtractor`。参考 [docs/openpi_usage.md](docs/openpi_usage.md)。
 
 如果不确定，运行以下命令查看 policy 结构：
 
