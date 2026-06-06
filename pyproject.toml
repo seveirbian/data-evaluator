@@ -12,6 +12,7 @@ dependencies = [
     "pillow",
     "tqdm",
     "torch",
+    "openpi>=0.0.0",
 ]
 
 [project.optional-dependencies]
