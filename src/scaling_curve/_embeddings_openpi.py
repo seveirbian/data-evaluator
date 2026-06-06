@@ -156,31 +156,61 @@ class OpenPIEmbeddingExtractor:
         Returns:
             Dictionary mapping each camera key to its embedding tensor.
         """
-        # Prepare batch: add batch dimension and move to device
-        batch = {
-            k: v.unsqueeze(0).to(self.device)
-            for k, v in observation.items()
-            if isinstance(v, torch.Tensor)
-        }
-
         # Clear previous hook outputs
         self._hook_outputs = []
 
-        # Run forward pass
+        # Transform LeRobot format to openpi format
+        # LeRobot: {camera_key: tensor[C, H, W]}
+        # openpi expects images as dict of tensors
+
+        images = {}
+        image_masks = {}
+
+        for key in camera_keys:
+            if key in observation:
+                img = observation[key]
+                # LeRobot images are [C, H, W] in [0, 1], convert to what openpi expects
+                # openpi expects [B, H, W, C] normalized to [-1, 1] or [0, 255]
+                if img.dim() == 3:
+                    img = img.permute(1, 2, 0)  # [C, H, W] -> [H, W, C]
+                    # Normalize from [0, 1] to [-1, 1] (expected by SigLIP)
+                    img = img * 2.0 - 1.0
+                    images[key] = img.unsqueeze(0).to(self.device)  # Add batch dim
+                    image_masks[key] = torch.tensor([True], device=self.device)
+
+        # Create dummy state (required but not used for vision embedding)
+        state = torch.zeros((1, 7), device=self.device)  # 7-DOF dummy state
+
+        # Create observation object (using a simple namespace-like object)
+        class Observation:
+            def __init__(self, images, image_masks, state):
+                self.images = images
+                self.image_masks = image_masks
+                self.state = state
+                self.tokenized_prompt = None
+                self.tokenized_prompt_mask = None
+
+        obs = Observation(images, image_masks, state)
+
+        # Run forward pass using embed_prefix to trigger vision encoder
         with torch.no_grad():
-            # Note: openpi models don't have select_action, we need to call
-            # the model's forward method directly
-            # For now, this is a placeholder - the actual forward call
-            # will depend on how openpi's PI0Pytorch model is used
-            if hasattr(self.model, "sample_actions"):
-                # Try the sample_actions method if available
-                _ = self.model.sample_actions(batch)
-            else:
-                # Otherwise we need to call forward directly
-                # This will be implemented based on openpi's actual API
-                raise NotImplementedError(
-                    "Direct forward pass not yet implemented. "
-                    "OpenPI model requires specific input formatting."
+            try:
+                # Call embed_prefix which processes images through vision encoder
+                # This will trigger the hook on vision_tower
+                images_list = list(obs.images.values())
+                masks_list = list(obs.image_masks.values())
+
+                _ = self.model.embed_prefix(
+                    images=images_list,
+                    img_masks=masks_list,
+                    lang_tokens=None,
+                    lang_masks=None
+                )
+            except Exception as e:
+                # Fallback: try direct method
+                raise RuntimeError(
+                    f"Failed to run openpi model: {e}. "
+                    f"Check that input format is compatible with {self._model_type}."
                 )
 
         # Process hook outputs
