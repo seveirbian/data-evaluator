@@ -15,7 +15,7 @@ import torch
 
 try:
     import openpi
-    from openpi.training import config as _config
+    from openpi.models import pi0_config as _pi0_config
     from openpi.models_pytorch.pi0_pytorch import PI0Pytorch
     import safetensors.torch
     OPENPI_AVAILABLE = True
@@ -52,6 +52,16 @@ def _require_openpi_jax() -> None:
 
 
 _ModelType = Literal["pi0", "pi05", "pi0_fast"]
+
+
+def _get_model_config(model_type: _ModelType):
+    """Return the model config object for the given model type."""
+    if model_type == "pi05":
+        return _pi0_config.Pi0Config(action_horizon=15, pi05=True)
+    if model_type == "pi0_fast":
+        from openpi.models import pi0_fast as _pi0_fast
+        return _pi0_fast.Pi0FASTConfig(action_dim=8, action_horizon=10)
+    return _pi0_config.Pi0Config()
 
 
 def _flatten(t: torch.Tensor) -> torch.Tensor:
@@ -96,10 +106,10 @@ class OpenPIEmbeddingExtractor:
         self._hook_module = hook_module
 
         # Load openpi config
-        config = _config.get_config(model_type)
+        model_config = _get_model_config(model_type)
 
         # Create PyTorch model
-        self.model = PI0Pytorch(config.model)
+        self.model = PI0Pytorch(model_config)
         self.model.eval()
 
         # Load weights from checkpoint
@@ -283,18 +293,13 @@ class OpenPIEmbeddingExtractorJAX:
         self._model_type = model_type
 
         # Load openpi config
-        config = _config.get_config(model_type)
+        model_config = _get_model_config(model_type)
 
         # Create and load the JAX model
-        from openpi.model import restore_params
-        from openpi.models import pi0
+        from openpi.models import model as _model
 
-        params = restore_params(str(params_path), restore_type=np.ndarray)
-        self.model = pi0.Pi0(config.model, rngs=nnx.Rngs(0))
-
-        # Load params using orbax
-        checkpointer = ocp.PyTreeCheckpointer()
-        self.model_state = checkpointer.restore(str(params_path))
+        params = _model.restore_params(params_path, restore_type=np.ndarray)
+        self.model = model_config.load(params)
         self.model.eval()
 
         # Register forward hook using JAX's interception
@@ -323,117 +328,46 @@ class OpenPIEmbeddingExtractorJAX:
         target = getattr(module, parts[-1])
         setattr(module, parts[-1], _wrap_module_for_hook(target, target.__call__))
 
-    def _prepare_observation(
-        self, observation: dict[str, torch.Tensor]
-    ) -> dict:
-        """Convert PyTorch observation to JAX format expected by openpi.
-
-        Args:
-            observation: Dictionary from LeRobotDatasetLoader with torch tensors
-
-        Returns:
-            Dictionary in openpi JAX format
-        """
-        # Convert torch tensors to numpy, then to JAX
-        jax_obs = {}
-
-        # Handle images - LeRobot format to openpi format
-        # LeRobot: (C, H, W) float32 in [0, 1]
-        # openpi: (H, W, C) uint8 in [0, 255] or float32 in [-1, 1]
-
-        images = {}
-        image_masks = {}
-
-        # Map observation keys to openpi expected keys
-        # This is a simplified mapping - may need customization per dataset
-        for key, value in observation.items():
-            if isinstance(value, torch.Tensor):
-                # Convert from (C, H, W) to (H, W, C)
-                if value.dim() == 3:
-                    np_value = value.cpu().numpy().transpose(1, 2, 0)
-                    # Scale from [0, 1] to [0, 255] uint8
-                    if np_value.dtype == np.float32 or np_value.dtype == np.float64:
-                        np_value = (np_value * 255).astype(np.uint8)
-                    images[key] = jnp.array(np_value)
-                    image_masks[key] = jnp.array(True)
-
-        jax_obs["image"] = images
-        jax_obs["image_mask"] = image_masks
-
-        # Add dummy state (required by openpi but not used for embedding extraction)
-        jax_obs["state"] = jnp.zeros((7,))  # 7-DOF dummy state
-
-        return jax_obs
-
     def extract_per_camera(
         self,
         observation: dict[str, torch.Tensor],
         camera_keys: list[str],
     ) -> dict[str, torch.Tensor]:
-        """Run one forward pass and return {camera_key: embedding [D]}.
+        """Run the SigLIP vision encoder per camera and return {camera_key: embedding [D]}.
+
+        Directly calls self.model.PaliGemma.img for each image, bypassing
+        the unreliable NNX hook mechanism.
 
         Args:
-            observation: Dictionary with camera keys mapping to torch tensors.
-                Expected format from LeRobotDatasetLoader.
+            observation: Dictionary with camera keys mapping to torch tensors
+                in LeRobot format: {key: torch(C,H,W) float32 [0,1]}.
             camera_keys: List of camera keys to extract embeddings for.
 
         Returns:
-            Dictionary mapping each camera key to its embedding tensor (torch).
+            Dictionary mapping each camera key to its embedding tensor [D] (torch float32).
         """
-        # Clear previous hook outputs
-        self._hook_outputs = []
+        from openpi_client import image_tools
 
-        # Prepare observation in JAX format
-        jax_obs = self._prepare_observation(observation)
+        result = {}
+        for key in camera_keys:
+            if key not in observation:
+                continue
+            img = observation[key]
+            # [C,H,W] float [0,1] → [H,W,C] uint8 [0,255]
+            np_img = (img.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
+            # resize to 224×224 with padding, add batch dim → [1,224,224,3]
+            np_img = image_tools.resize_with_pad(np_img[None], 224, 224)
+            # uint8 → float32 [-1, 1]
+            jax_img = jnp.array(np_img, dtype=jnp.float32) / 255.0 * 2.0 - 1.0
 
-        # Create Observation object
-        from openpi.models import model as _model
+            # image_tokens: [1, num_patches, embed_dim]  (num_patches=256 for So400m/14)
+            image_tokens, _ = self.model.PaliGemma.img(jax_img, train=False)
+            print(f"[img encoder] key={key} tokens shape={image_tokens.shape} "
+                  f"dtype={image_tokens.dtype} mean={float(image_tokens.mean()):.4f} "
+                  f"std={float(image_tokens.std()):.4f}")
 
-        obs = _model.Observation(
-            images=jax_obs["image"],
-            image_masks=jax_obs["image_mask"],
-            state=jax_obs["state"],
-        )
+            # global average pool over patches → [1, embed_dim] → [embed_dim]
+            emb = image_tokens.mean(axis=1).squeeze(0)
+            result[key] = torch.from_numpy(np.array(emb, dtype=np.float32))
 
-        # Run forward pass using embed_prefix (processes images through vision encoder)
-        with jax.numpy_rank_promotion("allow"):
-            tokens, input_mask, ar_mask = self.model.embed_prefix(obs)
-
-        # Process hook outputs (captured from vision encoder)
-        outputs = [_flatten_jax(o) for o in self._hook_outputs]
-        n_cams = len(camera_keys)
-
-        if not outputs:
-            # If hook didn't work, fall back to using the tokens directly
-            # tokens shape: [B, seq_len, embed_dim]
-            # For multiple cameras, we need to split by camera
-            if tokens.ndim == 3:
-                # Take mean over sequence dimension to get [B, embed_dim]
-                embeddings = tokens.mean(axis=1)
-                # Convert back to torch
-                embeddings = torch.from_numpy(np.array(embeddings))
-                return {k: embeddings.squeeze(0) for k in camera_keys}
-
-            raise RuntimeError(
-                f"Hook never fired during forward pass. "
-                f"Check that hook_module '{self._hook_module}' is correct."
-            )
-
-        # Convert JAX arrays to torch tensors
-        torch_outputs = [torch.from_numpy(np.array(o)) for o in outputs]
-
-        # Match outputs to camera keys
-        if len(torch_outputs) == n_cams:
-            return {k: torch_outputs[i].squeeze(0) for i, k in enumerate(camera_keys)}
-
-        if len(torch_outputs) == 1:
-            flat = torch_outputs[0]
-            if flat.shape[0] == n_cams:
-                return {k: flat[i] for i, k in enumerate(camera_keys)}
-            emb = flat.squeeze(0)
-            return {k: emb for k in camera_keys}
-
-        raise RuntimeError(
-            f"Hook fired {len(outputs)} time(s) but expected {n_cams} camera(s). "
-            "Try a different hook_module path."
-        )
+        return result

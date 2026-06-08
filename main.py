@@ -108,7 +108,7 @@ def test_openpi(checkpoint_path: str = "~/.cache/openpi/pi05_pytorch"):
     plt.show()
 
 
-def test_openpi_jax(checkpoint_path: str = "~/.cache/openpi/openpi-assets/checkpoints/pi05_droid"):
+def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_base"):
     """Test OpenPIEmbeddingExtractorJAX with scaling curve."""
     from src.scaling_curve._embeddings_openpi import OpenPIEmbeddingExtractorJAX as Extractor
 
@@ -153,10 +153,39 @@ def test_openpi_jax(checkpoint_path: str = "~/.cache/openpi/openpi-assets/checkp
     train_embs_stacked = {k: torch.stack(v, dim=0) for k, v in train_embs.items()}
     eval_embs_stacked = {k: torch.stack(v, dim=0) for k, v in eval_embs.items()}
 
-    # Generate scaling curve
+    # Intermediate plot: per-eval-episode similarity to full train set
     import numpy as np
     import matplotlib.pyplot as plt
+    from src.scaling_curve._similarity import per_sample_scores
 
+    eval_scores = per_sample_scores(train_embs_stacked, eval_embs_stacked).numpy()
+    eval_ids = list(range(len(eval_scores)))
+
+    margin = max((eval_scores.max() - eval_scores.min()) * 0.5, 0.002)
+    ylo = max(0.0, eval_scores.min() - margin)
+    yhi = min(1.0, eval_scores.max() + margin)
+
+    fig0, ax0 = plt.subplots(figsize=(max(6, len(eval_scores) * 0.5), 4))
+    bars = ax0.bar(eval_ids, eval_scores - ylo, color="steelblue", alpha=0.8, bottom=ylo)
+    ax0.axhline(eval_scores.mean(), color="crimson", linestyle="--", linewidth=1.2,
+                label=f"mean={eval_scores.mean():.4f}")
+    for bar, score in zip(bars, eval_scores):
+        ax0.text(bar.get_x() + bar.get_width() / 2, score + margin * 0.1,
+                 f"{score:.4f}", ha="center", va="bottom", fontsize=7)
+    ax0.set_xlabel("Eval episode ID")
+    ax0.set_ylabel("Cosine similarity (raw)")
+    ax0.set_title("Per-eval-episode similarity to full train set")
+    ax0.set_xticks(eval_ids)
+    ax0.set_ylim(ylo, yhi + margin)
+    ax0.legend()
+    ax0.grid(axis="y", linestyle="--", alpha=0.4)
+
+    per_eval_path = "openpi_jax_per_eval.png"
+    fig0.savefig(per_eval_path, dpi=150, bbox_inches="tight")
+    print(f"Per-eval plot saved to {per_eval_path}")
+    plt.close(fig0)
+
+    # Generate scaling curve
     n_total = len(train_obs)
     num_points = 5
     steps = np.unique(np.geomspace(1, n_total, num_points).round().astype(int))
@@ -192,7 +221,7 @@ if __name__ == "__main__":
         if sys.argv[1] == "--openpi":
             test_openpi(sys.argv[2] if len(sys.argv) > 2 else None)
         elif sys.argv[1] == "--openpi-jax":
-            test_openpi_jax(sys.argv[2] if len(sys.argv) > 2 else None)
+            test_openpi_jax(sys.argv[2] if len(sys.argv) > 2 else "/root/codes/openpi/pi05_base/pi05_base")
         else:
             print("Usage: python main.py [--openpi <checkpoint_path>] [--openpi-jax <checkpoint_path>]")
     else:

@@ -41,6 +41,29 @@ def _per_sample_max_similarity(
     return sim.max(dim=1).values
 
 
+def per_sample_scores(
+    train_embeddings: dict[str, torch.Tensor],
+    eval_embeddings: dict[str, torch.Tensor],
+) -> torch.Tensor:
+    """Return per-eval-episode similarity scores (before taking the mean).
+
+    Returns:
+        [N_eval] scores normalized to [0, 1].
+    """
+    camera_keys = list(train_embeddings.keys())
+    if not camera_keys:
+        raise ValueError("No camera embeddings provided.")
+
+    per_camera = torch.stack(
+        [
+            _per_sample_max_similarity(eval_embeddings[k], train_embeddings[k])
+            for k in camera_keys
+        ],
+        dim=1,
+    )
+    return per_camera.max(dim=1).values  # [N_eval], raw cosine similarity in [-1, 1]
+
+
 def policy_embedding_similarity(
     train_embeddings: dict[str, torch.Tensor],
     eval_embeddings: dict[str, torch.Tensor],
