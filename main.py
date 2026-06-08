@@ -111,52 +111,54 @@ def test_openpi(checkpoint_path: str = "~/.cache/openpi/pi05_pytorch"):
 def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_base"):
     """Test OpenPIEmbeddingExtractorJAX with scaling curve."""
     from src.scaling_curve._embeddings_openpi import OpenPIEmbeddingExtractorJAX as Extractor
+    from tqdm import tqdm
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from src.scaling_curve._similarity import per_sample_scores
 
     checkpoint_path = Path(checkpoint_path).expanduser()
 
-    # Same as PyTorch version but using JAX extractor
     train_data_dir = "example/cuicuisha/data/train/Task-GrabCuicuishaPlaceMatting-30"
     eval_data_dir = "example/cuicuisha/data/eval/eval_act_Task-GrabCuicuishaPlaceMatting-30"
 
-    # Initialize JAX extractor
+    # --- Step 1: load model ---
+    print(f"[1/5] Loading model from {checkpoint_path} ...")
     extractor = Extractor(
         checkpoint_path=str(checkpoint_path),
         model_type="pi05",
         hook_module="PaliGemma.img",
     )
+    print("      Done.")
 
-    # Load datasets
+    # --- Step 2: load dataset metadata ---
+    print("[2/5] Loading dataset metadata ...")
     train_loader = LeRobotDatasetLoader(train_data_dir)
     eval_loader = LeRobotDatasetLoader(eval_data_dir)
-
     train_obs = train_loader.get_initial_observations()
     eval_obs = eval_loader.get_initial_observations()
-
     camera_keys = train_loader.camera_keys
+    print(f"      Train: {len(train_obs)} episodes | Eval: {len(eval_obs)} episodes | "
+          f"Cameras: {camera_keys}")
 
-    # Extract embeddings
-    print(f"Extracting embeddings for {len(train_obs)} train episodes...")
+    # --- Step 3: extract embeddings ---
+    print(f"[3/5] Extracting train embeddings ({len(train_obs)} episodes) ...")
     train_embs = {k: [] for k in camera_keys}
-    for obs in train_obs:
+    for obs in tqdm(train_obs, desc="  train", unit="ep"):
         embs = extractor.extract_per_camera(obs, camera_keys)
         for k, v in embs.items():
             train_embs[k].append(v)
 
-    print(f"Extracting embeddings for {len(eval_obs)} eval episodes...")
+    print(f"[3/5] Extracting eval embeddings ({len(eval_obs)} episodes) ...")
     eval_embs = {k: [] for k in camera_keys}
-    for obs in eval_obs:
+    for obs in tqdm(eval_obs, desc="  eval ", unit="ep"):
         embs = extractor.extract_per_camera(obs, camera_keys)
         for k, v in embs.items():
             eval_embs[k].append(v)
 
-    # Stack embeddings
+    # --- Step 4: per-eval intermediate plot ---
+    print("[4/5] Computing per-eval similarity and generating intermediate plot ...")
     train_embs_stacked = {k: torch.stack(v, dim=0) for k, v in train_embs.items()}
     eval_embs_stacked = {k: torch.stack(v, dim=0) for k, v in eval_embs.items()}
-
-    # Intermediate plot: per-eval-episode similarity to full train set
-    import numpy as np
-    import matplotlib.pyplot as plt
-    from src.scaling_curve._similarity import per_sample_scores
 
     eval_scores = per_sample_scores(train_embs_stacked, eval_embs_stacked).numpy()
     eval_ids = list(range(len(eval_scores)))
@@ -182,20 +184,21 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
 
     per_eval_path = "openpi_jax_per_eval.png"
     fig0.savefig(per_eval_path, dpi=150, bbox_inches="tight")
-    print(f"Per-eval plot saved to {per_eval_path}")
+    print(f"      Per-eval plot saved to {per_eval_path}")
     plt.close(fig0)
 
-    # Generate scaling curve
+    # --- Step 5: scaling curve ---
+    print("[5/5] Computing scaling curve ...")
     n_total = len(train_obs)
     num_points = 5
     steps = np.unique(np.geomspace(1, n_total, num_points).round().astype(int))
 
     results = []
-    for n in steps:
+    for n in tqdm(steps, desc="  curve", unit="pt"):
         train_subset = {k: v[:n] for k, v in train_embs_stacked.items()}
         score = policy_embedding_similarity(train_subset, eval_embs_stacked)
         results.append((n, score))
-        print(f"Steps: {n}, Score: {score:.4f}")
+        tqdm.write(f"      n={n:4d}  score={score:.4f}")
 
     # Plot
     xs = [r[0] for r in results]
@@ -212,7 +215,8 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
 
     save_path = "openpi_jax_curve.png"
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    print(f"Done. Saved to {save_path}")
+    print(f"      Scaling curve saved to {save_path}")
+    print("All done.")
     plt.show()
 
 
