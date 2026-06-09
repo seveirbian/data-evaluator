@@ -198,6 +198,17 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
             axs[ci][0].set_ylabel(key.split(".")[-1], fontsize=8,
                                   rotation=0, ha="right", va="center", labelpad=4)
 
+    # Remap eval obs keys to match train keys when camera_map is set.
+    # e.g. obs["eval_cam"] → obs["train_cam"] so extract_batch sees unified keys.
+    def _remap_obs(obs: dict) -> dict:
+        if not camera_map:
+            return obs
+        remapped = dict(obs)
+        for train_key, eval_key in camera_map.items():
+            if eval_key in remapped:
+                remapped[train_key] = remapped.pop(eval_key)
+        return remapped
+
     n_cam = len(camera_keys)
     n_ep  = min(_N_VIS, len(train_obs), len(eval_obs)) or _N_VIS
     fig_out = plt.figure(figsize=(n_ep * 2.6, n_cam * 5.2))
@@ -226,17 +237,6 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
 
     # --- Step 3: extract embeddings (batched) ---
     bs = extractor._batch_size
-
-    # Remap eval obs keys to match train keys when camera_map is set.
-    # e.g. obs["eval_cam"] → obs["train_cam"] so extract_batch sees unified keys.
-    def _remap_obs(obs: dict) -> dict:
-        if not camera_map:
-            return obs
-        remapped = dict(obs)
-        for train_key, eval_key in camera_map.items():
-            if eval_key in remapped:
-                remapped[train_key] = remapped.pop(eval_key)
-        return remapped
 
     def _extract_all(obs_list, label, remap=False):
         embs = {k: [] for k in camera_keys}
