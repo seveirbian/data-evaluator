@@ -133,18 +133,8 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
     train_data_dir = "example/cuicuisha/data/train/Task-GrabCuicuishaPlaceMatting-30"
     eval_data_dir = "example/cuicuisha/data/eval/eval_act_Task-GrabCuicuishaPlaceMatting-30"
 
-    # --- Step 1: load model ---
-    print(f"[1/5] Loading model from {checkpoint_path} ...")
-    extractor = Extractor(
-        checkpoint_path=str(checkpoint_path),
-        model_type="pi05",
-        hook_module="PaliGemma.img",
-        batch_size=32,
-    )
-    print("      Done.")
-
-    # --- Step 2: load dataset metadata ---
-    print("[2/5] Loading dataset metadata ...")
+    # --- Step 1: load datasets and validate camera mapping (fast, fail-early) ---
+    print("[1/5] Loading dataset metadata ...")
     train_loader = LeRobotDatasetLoader(train_data_dir)
     eval_loader = LeRobotDatasetLoader(eval_data_dir)
     train_obs = train_loader.get_initial_observations()
@@ -157,7 +147,6 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
 
     # Resolve final camera_keys and validate/complete camera_map.
     if camera_map:
-        # User provided explicit mapping — use train keys that appear in the map.
         missing = [k for k in camera_map if k not in train_camera_keys]
         if missing:
             raise ValueError(f"camera_map keys not found in train dataset: {missing}")
@@ -169,7 +158,6 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
         camera_keys = [k for k in train_camera_keys if k in eval_camera_keys]
 
     if not camera_keys:
-        # Print suggested positional mapping so user can paste it in.
         n = min(len(train_camera_keys), len(eval_camera_keys))
         suggested = {train_camera_keys[i]: eval_camera_keys[i] for i in range(n)}
         lines = [f'    "{tk}": "{ek}",' for tk, ek in suggested.items()]
@@ -182,6 +170,17 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
         raise SystemExit(1)
 
     print(f"      Active cameras: {camera_keys}")
+    print("      Dataset OK.")
+
+    # --- Step 2: load model weights (slow, only after data validation passes) ---
+    print(f"[2/5] Loading model from {checkpoint_path} ...")
+    extractor = Extractor(
+        checkpoint_path=str(checkpoint_path),
+        model_type="pi05",
+        hook_module="PaliGemma.img",
+        batch_size=32,
+    )
+    print("      Done.")
 
     # --- Step 3: extract embeddings (batched) ---
     bs = extractor._batch_size
