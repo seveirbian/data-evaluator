@@ -127,6 +127,7 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
         checkpoint_path=str(checkpoint_path),
         model_type="pi05",
         hook_module="PaliGemma.img",
+        batch_size=32,
     )
     print("      Done.")
 
@@ -140,20 +141,24 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
     print(f"      Train: {len(train_obs)} episodes | Eval: {len(eval_obs)} episodes | "
           f"Cameras: {camera_keys}")
 
-    # --- Step 3: extract embeddings ---
-    print(f"[3/5] Extracting train embeddings ({len(train_obs)} episodes) ...")
-    train_embs = {k: [] for k in camera_keys}
-    for obs in tqdm(train_obs, desc="  train", unit="ep"):
-        embs = extractor.extract_per_camera(obs, camera_keys)
-        for k, v in embs.items():
-            train_embs[k].append(v)
+    # --- Step 3: extract embeddings (batched) ---
+    bs = extractor._batch_size
 
-    print(f"[3/5] Extracting eval embeddings ({len(eval_obs)} episodes) ...")
-    eval_embs = {k: [] for k in camera_keys}
-    for obs in tqdm(eval_obs, desc="  eval ", unit="ep"):
-        embs = extractor.extract_per_camera(obs, camera_keys)
-        for k, v in embs.items():
-            eval_embs[k].append(v)
+    def _extract_all(obs_list, label):
+        embs = {k: [] for k in camera_keys}
+        n_batches = (len(obs_list) + bs - 1) // bs
+        for i in tqdm(range(0, len(obs_list), bs), desc=f"  {label}", unit="batch",
+                      total=n_batches):
+            for result in extractor.extract_batch(obs_list[i : i + bs], camera_keys):
+                for k, v in result.items():
+                    embs[k].append(v)
+        return embs
+
+    print(f"[3/5] Extracting train embeddings ({len(train_obs)} eps, batch_size={bs}) ...")
+    train_embs = _extract_all(train_obs, "train")
+
+    print(f"[3/5] Extracting eval  embeddings ({len(eval_obs)} eps, batch_size={bs}) ...")
+    eval_embs = _extract_all(eval_obs, "eval ")
 
     # --- Step 4: per-eval intermediate plot ---
     print("[4/5] Computing per-eval similarity and generating intermediate plot ...")

@@ -7,11 +7,17 @@ from openpi's π₀.₅ and other models.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
 import torch
+
+# Must be set before `import jax` — prevents JAX from pre-allocating 90 % of
+# every visible GPU on first use (the default behaviour that caused OOM with
+# many-episode datasets on multi-GPU machines).
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 try:
     import openpi
@@ -277,6 +283,8 @@ class OpenPIEmbeddingExtractorJAX:
         checkpoint_path: str,
         model_type: _ModelType = "pi05",
         hook_module: str = "PaliGemma.img",
+        gpu_device: int = 0,
+        batch_size: int = 32,
     ):
         _require_openpi_jax()
 
@@ -291,83 +299,88 @@ class OpenPIEmbeddingExtractorJAX:
 
         self._hook_module = hook_module
         self._model_type = model_type
+        self._batch_size = batch_size
 
-        # Load openpi config
+        # Pin all JAX operations to a single GPU to prevent accidental
+        # model replication across all visible devices.
+        gpu_devices = jax.devices("gpu")
+        if not gpu_devices:
+            raise RuntimeError("No JAX GPU devices found.")
+        self._jax_device = gpu_devices[gpu_device % len(gpu_devices)]
+        print(f"      JAX device: {self._jax_device} "
+              f"({len(gpu_devices)} GPU(s) visible, using index {gpu_device % len(gpu_devices)})"
+              f", batch_size={batch_size}")
+
+        # Load openpi config and model weights on the selected GPU only.
         model_config = _get_model_config(model_type)
-
-        # Create and load the JAX model
         from openpi.models import model as _model
 
-        params = _model.restore_params(params_path, restore_type=np.ndarray)
-        self.model = model_config.load(params)
-        self.model.eval()
+        with jax.default_device(self._jax_device):
+            params = _model.restore_params(params_path, restore_type=np.ndarray)
+            self.model = model_config.load(params)
+            self.model.eval()
 
-        # Register forward hook using JAX's interception
-        self._hook_outputs: list[jnp.ndarray] = []
-        self._register_hook(hook_module)
+    def extract_batch(
+        self,
+        observations: list[dict[str, torch.Tensor]],
+        camera_keys: list[str],
+    ) -> list[dict[str, torch.Tensor]]:
+        """Run SigLIP on a list of observations in batches.
 
-    def _register_hook(self, module_path: str):
-        """Register hook on the specified module using JAX wrapper."""
+        Each forward pass processes ``batch_size`` episodes × all cameras together
+        as a single ``[B*N_cams, 224, 224, 3]`` tensor, so the number of GPU
+        dispatches is ``ceil(N_episodes / batch_size)`` regardless of camera count.
 
-        def _wrap_module_for_hook(module, original_method):
-            """Wrap a module method to capture outputs."""
-            def wrapped(*args, **kwargs):
-                result = original_method(*args, **kwargs)
-                if isinstance(result, jnp.ndarray):
-                    self._hook_outputs.append(result)
-                return result
-            return wrapped
+        Args:
+            observations: List of per-episode observation dicts
+                {camera_key: torch(C,H,W) float32 [0,1]}.
+            camera_keys: Camera keys to extract.
 
-        # Navigate to the target module
-        parts = module_path.split(".")
-        module = self.model
-        for attr in parts[:-1]:
-            module = getattr(module, attr)
+        Returns:
+            List of per-episode embedding dicts {camera_key: torch([D])}.
+        """
+        from openpi_client import image_tools
 
-        # Wrap the __call__ method of the target
-        target = getattr(module, parts[-1])
-        setattr(module, parts[-1], _wrap_module_for_hook(target, target.__call__))
+        results: list[dict[str, torch.Tensor]] = [{} for _ in observations]
+
+        for ep_start in range(0, len(observations), self._batch_size):
+            ep_slice = observations[ep_start : ep_start + self._batch_size]
+
+            # Collect all (obs_idx, cam_key, image) for this episode window.
+            imgs: list[np.ndarray] = []     # [H,W,C] uint8
+            meta: list[tuple[int, str]] = []  # (obs_idx_in_results, cam_key)
+
+            for local_i, obs in enumerate(ep_slice):
+                obs_idx = ep_start + local_i
+                for key in camera_keys:
+                    if key not in obs:
+                        continue
+                    img = obs[key]
+                    np_img = (img.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
+                    np_img = image_tools.resize_with_pad(np_img[None], 224, 224)[0]
+                    imgs.append(np_img)
+                    meta.append((obs_idx, key))
+
+            if not imgs:
+                continue
+
+            # One forward pass for all episodes × cameras in this window.
+            batch = np.stack(imgs, axis=0)  # [B*N_cams, H, W, C]
+            with jax.default_device(self._jax_device):
+                jax_batch = jnp.array(batch, dtype=jnp.float32) / 255.0 * 2.0 - 1.0
+                tokens, _ = self.model.PaliGemma.img(jax_batch, train=False)
+                embs_np = np.array(tokens.mean(axis=1), dtype=np.float32)  # [B*N_cams, D]
+            del jax_batch, tokens
+
+            for (obs_idx, key), emb in zip(meta, embs_np):
+                results[obs_idx][key] = torch.from_numpy(emb)
+
+        return results
 
     def extract_per_camera(
         self,
         observation: dict[str, torch.Tensor],
         camera_keys: list[str],
     ) -> dict[str, torch.Tensor]:
-        """Run the SigLIP vision encoder per camera and return {camera_key: embedding [D]}.
-
-        Directly calls self.model.PaliGemma.img for each image, bypassing
-        the unreliable NNX hook mechanism.
-
-        Args:
-            observation: Dictionary with camera keys mapping to torch tensors
-                in LeRobot format: {key: torch(C,H,W) float32 [0,1]}.
-            camera_keys: List of camera keys to extract embeddings for.
-
-        Returns:
-            Dictionary mapping each camera key to its embedding tensor [D] (torch float32).
-        """
-        from openpi_client import image_tools
-
-        result = {}
-        for key in camera_keys:
-            if key not in observation:
-                continue
-            img = observation[key]
-            # [C,H,W] float [0,1] → [H,W,C] uint8 [0,255]
-            np_img = (img.cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
-            # resize to 224×224 with padding, add batch dim → [1,224,224,3]
-            np_img = image_tools.resize_with_pad(np_img[None], 224, 224)
-            # uint8 → float32 [-1, 1]
-            jax_img = jnp.array(np_img, dtype=jnp.float32) / 255.0 * 2.0 - 1.0
-
-            # image_tokens: [1, num_patches, embed_dim]  (num_patches=256 for So400m/14)
-            image_tokens, _ = self.model.PaliGemma.img(jax_img, train=False)
-            print(f"[img encoder] key={key} tokens shape={image_tokens.shape} "
-                  f"dtype={image_tokens.dtype} mean={float(image_tokens.mean()):.4f} "
-                  f"std={float(image_tokens.std()):.4f}")
-
-            # global average pool over patches → [1, embed_dim] → [embed_dim]
-            emb = image_tokens.mean(axis=1).squeeze(0)
-            result[key] = torch.from_numpy(np.array(emb, dtype=np.float32))
-
-        return result
+        """Single-observation convenience wrapper around extract_batch."""
+        return self.extract_batch([observation], camera_keys)[0]
