@@ -102,6 +102,7 @@ def test_openpi(checkpoint_path: str = "~/.cache/openpi/pi05_pytorch"):
     ax.set_xlabel("Training episodes")
     ax.set_ylabel("c̄_π")
     ax.set_title("OpenPI Scaling Curve (PyTorch)")
+    ax.set_ylim(0, 1)
     ax.grid(True, linestyle="--", alpha=0.5)
 
     save_path = "openpi_pytorch_curve.png"
@@ -318,6 +319,7 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
     ax.set_xlabel("Training episodes")
     ax.set_ylabel("c̄_π")
     ax.set_title("OpenPI Scaling Curve (JAX)")
+    ax.set_ylim(0, 1)
     ax.grid(True, linestyle="--", alpha=0.5)
 
     save_path = "openpi_jax_curve.png"
