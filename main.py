@@ -109,12 +109,24 @@ def test_openpi(checkpoint_path: str = "~/.cache/openpi/pi05_pytorch"):
 
 
 def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_base"):
-    """Test OpenPIEmbeddingExtractorJAX with scaling curve."""
+    """Test OpenPIEmbeddingExtractorJAX with scaling curve.
+
+    If train and eval datasets use different camera key names, set camera_map below:
+        camera_map = {
+            "<train_camera_key>": "<eval_camera_key>",
+            ...
+        }
+    Leave as {} to auto-detect common keys (works when both sides share the same names).
+    """
     from src.scaling_curve._embeddings_openpi import OpenPIEmbeddingExtractorJAX as Extractor
     from tqdm import tqdm
     import numpy as np
     import matplotlib.pyplot as plt
     from src.scaling_curve._similarity import per_sample_scores
+
+    # ── Camera key mapping (train key → eval key) ──────────────────────────────
+    # Edit this dict when train/eval datasets use different camera names.
+    camera_map: dict[str, str] = {}
 
     checkpoint_path = Path(checkpoint_path).expanduser()
 
@@ -137,28 +149,72 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
     eval_loader = LeRobotDatasetLoader(eval_data_dir)
     train_obs = train_loader.get_initial_observations()
     eval_obs = eval_loader.get_initial_observations()
-    camera_keys = train_loader.camera_keys
-    print(f"      Train: {len(train_obs)} episodes | Eval: {len(eval_obs)} episodes | "
-          f"Cameras: {camera_keys}")
+    train_camera_keys = train_loader.camera_keys
+    eval_camera_keys  = eval_loader.camera_keys
+    print(f"      Train: {len(train_obs)} episodes | Eval: {len(eval_obs)} episodes")
+    print(f"      Train cameras : {train_camera_keys}")
+    print(f"      Eval  cameras : {eval_camera_keys}")
+
+    # Resolve final camera_keys and validate/complete camera_map.
+    if camera_map:
+        # User provided explicit mapping — use train keys that appear in the map.
+        missing = [k for k in camera_map if k not in train_camera_keys]
+        if missing:
+            raise ValueError(f"camera_map keys not found in train dataset: {missing}")
+        bad_vals = [v for v in camera_map.values() if v not in eval_camera_keys]
+        if bad_vals:
+            raise ValueError(f"camera_map values not found in eval dataset: {bad_vals}")
+        camera_keys = list(camera_map.keys())
+    else:
+        camera_keys = [k for k in train_camera_keys if k in eval_camera_keys]
+
+    if not camera_keys:
+        # Print suggested positional mapping so user can paste it in.
+        n = min(len(train_camera_keys), len(eval_camera_keys))
+        suggested = {train_camera_keys[i]: eval_camera_keys[i] for i in range(n)}
+        lines = [f'    "{tk}": "{ek}",' for tk, ek in suggested.items()]
+        print("\n  [!] No common camera keys found between train and eval.")
+        print("      Edit the camera_map dict in test_openpi_jax (suggested positional mapping):")
+        print("      camera_map = {")
+        for line in lines:
+            print(f"      {line}")
+        print("      }")
+        raise SystemExit(1)
+
+    print(f"      Active cameras: {camera_keys}")
 
     # --- Step 3: extract embeddings (batched) ---
     bs = extractor._batch_size
 
-    def _extract_all(obs_list, label):
+    # Remap eval obs keys to match train keys when camera_map is set.
+    # e.g. obs["eval_cam"] → obs["train_cam"] so extract_batch sees unified keys.
+    def _remap_obs(obs: dict) -> dict:
+        if not camera_map:
+            return obs
+        remapped = dict(obs)
+        for train_key, eval_key in camera_map.items():
+            if eval_key in remapped:
+                remapped[train_key] = remapped.pop(eval_key)
+        return remapped
+
+    def _extract_all(obs_list, label, remap=False):
         embs = {k: [] for k in camera_keys}
         n_batches = (len(obs_list) + bs - 1) // bs
         for i in tqdm(range(0, len(obs_list), bs), desc=f"  {label}", unit="batch",
                       total=n_batches):
-            for result in extractor.extract_batch(obs_list[i : i + bs], camera_keys):
+            batch = obs_list[i : i + bs]
+            if remap:
+                batch = [_remap_obs(o) for o in batch]
+            for result in extractor.extract_batch(batch, camera_keys):
                 for k, v in result.items():
                     embs[k].append(v)
         return embs
 
     print(f"[3/5] Extracting train embeddings ({len(train_obs)} eps, batch_size={bs}) ...")
-    train_embs = _extract_all(train_obs, "train")
+    train_embs = _extract_all(train_obs, "train", remap=False)
 
     print(f"[3/5] Extracting eval  embeddings ({len(eval_obs)} eps, batch_size={bs}) ...")
-    eval_embs = _extract_all(eval_obs, "eval ")
+    eval_embs = _extract_all(eval_obs, "eval ", remap=True)
 
     # --- Step 4: per-eval intermediate plot ---
     print("[4/5] Computing per-eval similarity and generating intermediate plot ...")
