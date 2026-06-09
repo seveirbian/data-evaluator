@@ -170,6 +170,48 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
         raise SystemExit(1)
 
     print(f"      Active cameras: {camera_keys}")
+
+    # --- Step 1b: visualize sample observations (verify camera mapping) ---
+    print("      Saving observation preview ...")
+    _N_VIS = 4  # episodes to show per dataset
+
+    def _draw_obs_grid(sf, obs_list, keys, title, remap_fn=None):
+        """Fill a SubFigure with a cameras × episodes image grid."""
+        n_ep  = min(_N_VIS, len(obs_list))
+        n_cam = len(keys)
+        axs   = sf.subplots(n_cam, n_ep, squeeze=False)
+        sf.suptitle(title, fontsize=10)
+        # Spread sample indices evenly across the dataset.
+        indices = [int(i * (len(obs_list) - 1) / max(n_ep - 1, 1)) for i in range(n_ep)]
+        for ci, key in enumerate(keys):
+            for col, ep_i in enumerate(indices):
+                ax  = axs[ci][col]
+                obs = remap_fn(obs_list[ep_i]) if remap_fn else obs_list[ep_i]
+                if key in obs:
+                    ax.imshow(obs[key].permute(1, 2, 0).numpy().clip(0, 1))
+                else:
+                    ax.text(0.5, 0.5, "missing", ha="center", va="center",
+                            transform=ax.transAxes, fontsize=8, color="red")
+                ax.axis("off")
+                if ci == 0:
+                    ax.set_title(f"ep {ep_i}", fontsize=8)
+            axs[ci][0].set_ylabel(key.split(".")[-1], fontsize=8,
+                                  rotation=0, ha="right", va="center", labelpad=4)
+
+    n_cam = len(camera_keys)
+    n_ep  = min(_N_VIS, len(train_obs), len(eval_obs)) or _N_VIS
+    fig_out = plt.figure(figsize=(n_ep * 2.6, n_cam * 5.2))
+    sf_train, sf_eval = fig_out.subfigures(2, 1, hspace=0.3)
+
+    _draw_obs_grid(sf_train, train_obs, camera_keys, f"Train ({len(train_obs)} eps)")
+    _draw_obs_grid(sf_eval,  eval_obs,  camera_keys,
+                   f"Eval ({len(eval_obs)} eps) — after camera_map",
+                   remap_fn=_remap_obs if camera_map else None)
+
+    obs_preview_path = "openpi_jax_obs_preview.png"
+    fig_out.savefig(obs_preview_path, dpi=120, bbox_inches="tight")
+    plt.close(fig_out)
+    print(f"      Saved → {obs_preview_path}  (verify camera mapping is semantically correct)")
     print("      Dataset OK.")
 
     # --- Step 2: load model weights (slow, only after data validation passes) ---
