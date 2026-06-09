@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from ._dataset import LeRobotDatasetLoader
 from ._embeddings import PolicyEmbeddingExtractor
-from ._similarity import policy_embedding_similarity
+from ._similarity import compute_sim_matrix, policy_embedding_similarity, sim_norm_range
 
 
 def _compute_steps(n_total: int, num_points: int) -> list[int]:
@@ -136,13 +136,14 @@ class ScalingCurveGenerator:
         # Remap train observation camera keys to eval space if needed
         train_obs = self._remap_train_obs(self._train_obs)
 
-        # Extract all train embeddings once, then slice per step
+        # Extract all train embeddings once, compute full sim matrix, then slice per step
         all_train_embs = self._extract_embeddings(train_obs, "Train embeddings")
+        sim_matrix = compute_sim_matrix(all_train_embs, self._eval_embs)
+        c_min, c_max = sim_norm_range(sim_matrix)
 
         self._results = []
         for n in tqdm(steps, desc="Scaling curve", unit="step"):
-            train_embs_n = {k: v[:n] for k, v in all_train_embs.items()}
-            score = policy_embedding_similarity(train_embs_n, self._eval_embs)
+            score = policy_embedding_similarity(sim_matrix, n, c_min, c_max)
             self._results.append((n, score))
 
         return self._results

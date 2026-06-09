@@ -7,7 +7,7 @@ from src.scaling_curve import (
     OpenPIEmbeddingExtractorJAX,
 )
 from src.scaling_curve._dataset import LeRobotDatasetLoader
-from src.scaling_curve._similarity import policy_embedding_similarity
+from src.scaling_curve._similarity import compute_sim_matrix, policy_embedding_similarity, sim_norm_range
 
 
 def main():
@@ -82,10 +82,12 @@ def test_openpi(checkpoint_path: str = "~/.cache/openpi/pi05_pytorch"):
     num_points = 5
     steps = np.unique(np.geomspace(1, n_total, num_points).round().astype(int))
 
+    sim_matrix = compute_sim_matrix(train_embs_stacked, eval_embs_stacked)
+    c_min, c_max = sim_norm_range(sim_matrix)
+
     results = []
     for n in steps:
-        train_subset = {k: v[:n] for k, v in train_embs_stacked.items()}
-        score = policy_embedding_similarity(train_subset, eval_embs_stacked)
+        score = policy_embedding_similarity(sim_matrix, n, c_min, c_max)
         results.append((n, score))
         print(f"Steps: {n}, Score: {score:.4f}")
 
@@ -122,7 +124,7 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
     from tqdm import tqdm
     import numpy as np
     import matplotlib.pyplot as plt
-    from src.scaling_curve._similarity import per_sample_scores
+    from src.scaling_curve._similarity import compute_sim_matrix, per_sample_scores, policy_embedding_similarity, sim_norm_range
 
     # ── Camera key mapping (train key → eval key) ──────────────────────────────
     # Edit this dict when train/eval datasets use different camera names.
@@ -262,7 +264,11 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
     train_embs_stacked = {k: torch.stack(v, dim=0) for k, v in train_embs.items()}
     eval_embs_stacked = {k: torch.stack(v, dim=0) for k, v in eval_embs.items()}
 
-    eval_scores = per_sample_scores(train_embs_stacked, eval_embs_stacked).numpy()
+    # Compute full sim matrix once; derive global normalization range from it.
+    sim_matrix = compute_sim_matrix(train_embs_stacked, eval_embs_stacked)
+    c_min, c_max = sim_norm_range(sim_matrix)
+
+    eval_scores = per_sample_scores(sim_matrix, c_min, c_max).numpy()
     eval_ids = list(range(len(eval_scores)))
 
     margin = max((eval_scores.max() - eval_scores.min()) * 0.5, 0.002)
@@ -277,7 +283,7 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
         ax0.text(bar.get_x() + bar.get_width() / 2, score + margin * 0.1,
                  f"{score:.4f}", ha="center", va="bottom", fontsize=7)
     ax0.set_xlabel("Eval episode ID")
-    ax0.set_ylabel("Cosine similarity (raw)")
+    ax0.set_ylabel("Similarity score (normalized)")
     ax0.set_title("Per-eval-episode similarity to full train set")
     ax0.set_xticks(eval_ids)
     ax0.set_ylim(ylo, yhi + margin)
@@ -297,8 +303,7 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
 
     results = []
     for n in tqdm(steps, desc="  curve", unit="pt"):
-        train_subset = {k: v[:n] for k, v in train_embs_stacked.items()}
-        score = policy_embedding_similarity(train_subset, eval_embs_stacked)
+        score = policy_embedding_similarity(sim_matrix, n, c_min, c_max)
         results.append((n, score))
         tqdm.write(f"      n={n:4d}  score={score:.4f}")
 

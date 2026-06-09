@@ -4,6 +4,13 @@ Eq. 9:  c_π(x_i, x_j) = cosine_similarity(φ(x_i), φ(x_j))
 Eq. 10: c_π(x_i, D_train) = max_{x_j ∈ D_train} c_π(x_i, x_j)
         Multi-camera extension: max over cameras after computing per-camera scores.
 Eq. 11: c̄_π = mean_{x_i ∈ D_eval} c(x_i, D_train)   [after normalizing to [0,1]]
+
+Correct usage (paper-aligned):
+    sim = compute_sim_matrix(train_embs, eval_embs)        # [N_eval, N_train], once
+    c_min, c_max = sim_norm_range(sim)                     # global range from full set
+    scores = per_sample_scores(sim, c_min, c_max)          # bar chart
+    for n in steps:
+        c_bar = policy_embedding_similarity(sim, n, c_min, c_max)  # curve point
 """
 
 import torch
@@ -25,30 +32,21 @@ def _cosine_similarity_matrix(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return a @ b.T
 
 
-def _per_sample_max_similarity(
-    eval_embs: torch.Tensor, train_embs: torch.Tensor
-) -> torch.Tensor:
-    """Eq. 10: for each eval sample, take max cosine similarity over all train samples.
-
-    Args:
-        eval_embs:  [N_eval, D]
-        train_embs: [N_train, D]
-
-    Returns:
-        [N_eval] scores in [-1, 1].
-    """
-    sim = _cosine_similarity_matrix(eval_embs, train_embs)  # [N_eval, N_train]
-    return sim.max(dim=1).values
-
-
-def per_sample_scores(
+def compute_sim_matrix(
     train_embeddings: dict[str, torch.Tensor],
     eval_embeddings: dict[str, torch.Tensor],
 ) -> torch.Tensor:
-    """Return per-eval-episode similarity scores (before taking the mean).
+    """Compute [N_eval, N_train] similarity matrix with max-over-cameras fusion.
+
+    This is the core computation that should be done ONCE against the full
+    training set. The resulting matrix is then sliced per-n for the scaling curve.
+
+    Args:
+        train_embeddings: {camera_key: [N_train, D]}
+        eval_embeddings:  {camera_key: [N_eval, D]}
 
     Returns:
-        [N_eval] scores normalized to [0, 1].
+        [N_eval, N_train] cosine similarity matrix (max over cameras).
     """
     camera_keys = list(train_embeddings.keys())
     if not camera_keys:
@@ -56,47 +54,67 @@ def per_sample_scores(
 
     per_camera = torch.stack(
         [
-            _per_sample_max_similarity(eval_embeddings[k], train_embeddings[k])
+            _cosine_similarity_matrix(eval_embeddings[k], train_embeddings[k])
             for k in camera_keys
         ],
-        dim=1,
-    )
-    return per_camera.max(dim=1).values  # [N_eval], raw cosine similarity in [-1, 1]
+        dim=0,
+    )  # [N_cams, N_eval, N_train]
+    return per_camera.max(dim=0).values  # [N_eval, N_train]
+
+
+def sim_norm_range(sim_matrix: torch.Tensor) -> tuple[float, float]:
+    """Derive global normalization range from the full-set similarity matrix.
+
+    Must be called with the FULL training set matrix (all N_train columns) so
+    the range is stable and consistent across all scaling-curve subset calls.
+
+    Returns:
+        (c_min, c_max) scalars derived from per-eval max similarities.
+    """
+    full_scores = sim_matrix.max(dim=1).values  # [N_eval]
+    return full_scores.min().item(), full_scores.max().item()
+
+
+def per_sample_scores(
+    sim_matrix: torch.Tensor,
+    c_min: float,
+    c_max: float,
+) -> torch.Tensor:
+    """Eq. 10 + normalize: per-eval max similarity normalized to [0, 1].
+
+    Args:
+        sim_matrix: [N_eval, N_train] (full training set).
+        c_min, c_max: from sim_norm_range(sim_matrix).
+
+    Returns:
+        [N_eval] scores in [0, 1].
+    """
+    raw = sim_matrix.max(dim=1).values  # [N_eval]
+    denom = c_max - c_min
+    if denom < 1e-8:
+        return torch.ones_like(raw)
+    return (raw - c_min) / denom
 
 
 def policy_embedding_similarity(
-    train_embeddings: dict[str, torch.Tensor],
-    eval_embeddings: dict[str, torch.Tensor],
+    sim_matrix: torch.Tensor,
+    n: int,
+    c_min: float,
+    c_max: float,
 ) -> float:
-    """Compute c̄_π (Eq. 11) with per-camera independent similarity + max fusion.
-
-    For each eval sample x_i:
-        1. Per camera k: score_k = max_{x_j ∈ D_train} cosine_sim(φ^k(x_i), φ^k(x_j))
-        2. Fuse cameras:  score_i = max_k score_k
-    Then normalize all score_i to [0, 1] and return the mean.
+    """Eq. 11: c̄_π for first n training episodes, normalized by global range.
 
     Args:
-        train_embeddings: {camera_key: [N_train, D]}
-        eval_embeddings:  {camera_key: [N_eval, D]}
+        sim_matrix: [N_eval, N_train] full matrix from compute_sim_matrix().
+        n: number of training episodes to consider (uses first n columns).
+        c_min, c_max: global normalization range from sim_norm_range().
 
     Returns:
-        Scalar c̄_π ∈ [-1, 1].
+        Scalar c̄_π ∈ [0, 1].
     """
-    camera_keys = list(train_embeddings.keys())
-    if not camera_keys:
-        raise ValueError("No camera embeddings provided.")
-
-    # [N_eval, N_cams] per-camera max-similarity scores
-    per_camera_scores = torch.stack(
-        [
-            _per_sample_max_similarity(eval_embeddings[k], train_embeddings[k])
-            for k in camera_keys
-        ],
-        dim=1,
-    )
-
-    # Eq. 10 multi-camera: max over cameras
-    per_sample_scores = per_camera_scores.max(dim=1).values  # [N_eval]
-
-    # Eq. 11: mean over eval set
-    return per_sample_scores.mean().item()
+    scores_n = sim_matrix[:, :n].max(dim=1).values  # [N_eval]
+    denom = c_max - c_min
+    if denom < 1e-8:
+        return 1.0
+    normalized = (scores_n - c_min) / denom
+    return normalized.mean().item()
