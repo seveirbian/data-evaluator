@@ -180,6 +180,7 @@ class ScalingCurveGenerator:
         ax.set_xlabel("Training episodes")
         ax.set_ylabel("c̄_π")
         ax.set_title("Policy Embedding Similarity — Scaling Curve")
+        ax.set_ylim(0, 1)
         ax.grid(True, linestyle="--", alpha=0.5)
 
         if save_path is not None:
@@ -282,6 +283,7 @@ class MultiScalingCurveGenerator:
         ax.set_xlabel("Training episodes")
         ax.set_ylabel("c̄_π")
         ax.set_title("Policy Embedding Similarity — Scaling Curves")
+        ax.set_ylim(0, 1)
         ax.legend()
         ax.grid(True, linestyle="--", alpha=0.5)
 
