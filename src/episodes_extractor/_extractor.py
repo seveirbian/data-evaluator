@@ -66,6 +66,8 @@ def extract_episodes(
     episode_ids: list[int],
     out_dir: str | Path,
     repo_id: str = "extracted",
+    image_writer_threads: int = 4,
+    image_writer_processes: int = 0,
 ) -> dict[int, int]:
     """Extract selected episodes into a new LeRobot v3.0 dataset.
 
@@ -75,9 +77,21 @@ def extract_episodes(
             (new episode_index = position in this list).
         out_dir: output dataset root (must be empty or non-existent).
         repo_id: repo id for the output dataset.
+        image_writer_threads: threads used by lerobot to write per-frame PNGs in
+            the background. At the default of 0 lerobot writes them synchronously,
+            which dominates wall-time for high-resolution frames; >0 parallelizes
+            it. Defaults to 4.
+        image_writer_processes: processes for the image writer (in addition to
+            threads). 0 keeps writing in-process. Defaults to 0.
 
     Returns:
         {original_episode_id: new_episode_id}.
+
+    Note:
+        Source-video decode (~tens of ms/frame) and AV1 re-encode of the output
+        are inherent to this re-encoding approach and are not removed by the
+        knobs above; those knobs parallelize/​amortize the PNG-writing and
+        encode-invocation overhead around them.
     """
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -95,6 +109,8 @@ def extract_episodes(
             root=out_dir,
             robot_type=src.meta.robot_type,
             use_videos=True,
+            image_writer_threads=image_writer_threads,
+            image_writer_processes=image_writer_processes,
         )
 
         feature_keys = [k for k in src.features if k not in _DEFAULT_FEATURES]

@@ -28,10 +28,29 @@ def main() -> None:
     )
     parser.add_argument("--out", required=True, help="output dataset dir")
     parser.add_argument("--repo-id", default="extracted", help="output repo id")
+    parser.add_argument(
+        "--image-writer-threads",
+        type=int,
+        default=4,
+        help="threads for background PNG writing (0 = synchronous, slower)",
+    )
+    parser.add_argument(
+        "--image-writer-processes",
+        type=int,
+        default=0,
+        help="processes for the image writer (default 0)",
+    )
     args = parser.parse_args()
 
     episode_ids = _read_episode_ids(args.episodes)
-    mapping = extract_episodes(args.src, episode_ids, args.out, repo_id=args.repo_id)
+    mapping = extract_episodes(
+        args.src,
+        episode_ids,
+        args.out,
+        repo_id=args.repo_id,
+        image_writer_threads=args.image_writer_threads,
+        image_writer_processes=args.image_writer_processes,
+    )
     print(f"Extracted {len(mapping)} episodes to {args.out}")
     print(f"id mapping (original -> new): {mapping}")
 

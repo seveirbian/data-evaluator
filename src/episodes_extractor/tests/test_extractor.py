@@ -138,6 +138,29 @@ def test_extract_invalid_id_raises_before_writing(tmp_path):
         extract_episodes(src_dir, [0, 9], out_dir)
 
 
+def test_extract_round_trip_with_parallel_image_writer(tmp_path):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    src_dir = tmp_path / "src"
+    _build_synthetic_dataset(src_dir, lengths=[2, 3])  # episodes 0,1
+
+    out_dir = tmp_path / "out"
+    # Performance knobs must not change extraction results.
+    mapping = extract_episodes(
+        src_dir,
+        [1, 0],
+        out_dir,
+        image_writer_threads=2,
+    )
+
+    assert mapping == {1: 0, 0: 1}
+    out = LeRobotDataset("extracted", root=out_dir)
+    assert out.num_episodes == 2
+    assert out.num_frames == 3 + 2
+    # new episode 0 came from original episode 1 → state[:,0] == 1
+    assert float(out[0]["observation.state"][0]) == pytest.approx(1.0)
+
+
 from src.episodes_extractor.__main__ import _read_episode_ids
 
 
