@@ -148,3 +148,51 @@ def test_multi_plot_saves_file(tmp_path):
     save_path = tmp_path / "multi_curve.png"
     plotter.plot(save_path=str(save_path))
     assert save_path.exists()
+
+
+from src.scaling_curve._similarity import top_k_train_matches
+
+
+def test_top_k_matches_orders_by_score_descending():
+    # 2 eval episodes × 4 train episodes
+    sim = torch.tensor([
+        [0.1, 0.9, 0.3, 0.5],   # eval 0: best train = 1, then 3, then 2
+        [0.8, 0.2, 0.7, 0.6],   # eval 1: best train = 0, then 2, then 3
+    ])
+    c_min, c_max = 0.0, 1.0  # 归一化为恒等变换,便于手算
+    result = top_k_train_matches(sim, c_min, c_max, k=3)
+
+    assert isinstance(result, list)
+    assert [r["eval_id"] for r in result] == [0, 1]
+
+    ev0 = result[0]["top_k"]
+    assert [m["train_id"] for m in ev0] == [1, 3, 2]
+    assert ev0[0]["score"] == pytest.approx(0.9)
+    assert ev0[1]["score"] == pytest.approx(0.5)
+    assert ev0[2]["score"] == pytest.approx(0.3)
+
+    ev1 = result[1]["top_k"]
+    assert [m["train_id"] for m in ev1] == [0, 2, 3]
+
+
+def test_top_k_matches_clamps_k_to_n_train():
+    sim = torch.tensor([[0.2, 0.5]])  # 1 eval × 2 train
+    result = top_k_train_matches(sim, 0.0, 1.0, k=5)
+    assert len(result[0]["top_k"]) == 2  # clamp 到 N_train=2
+    assert [m["train_id"] for m in result[0]["top_k"]] == [1, 0]
+
+
+def test_top_k_matches_normalizes_scores():
+    sim = torch.tensor([[0.4, 0.6]])  # 1 eval × 2 train
+    # 归一化: (raw - 0.4) / (0.6 - 0.4)  → 0.6→1.0, 0.4→0.0
+    result = top_k_train_matches(sim, 0.4, 0.6, k=2)
+    scores = [m["score"] for m in result[0]["top_k"]]
+    assert scores[0] == pytest.approx(1.0)
+    assert scores[1] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_top_k_matches_degenerate_range_returns_one():
+    sim = torch.tensor([[0.5, 0.5, 0.5]])  # denom < 1e-8
+    result = top_k_train_matches(sim, 0.5, 0.5, k=2)
+    for m in result[0]["top_k"]:
+        assert m["score"] == 1.0
