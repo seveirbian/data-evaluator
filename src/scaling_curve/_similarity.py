@@ -118,3 +118,44 @@ def policy_embedding_similarity(
         return 1.0
     normalized = (scores_n - c_min) / denom
     return normalized.mean().item()
+
+
+def top_k_train_matches(
+    sim_matrix: torch.Tensor,
+    c_min: float,
+    c_max: float,
+    k: int = 5,
+) -> list[dict]:
+    """Return the top-k most similar train episodes for each eval episode.
+
+    Args:
+        sim_matrix: [N_eval, N_train] from compute_sim_matrix().
+        c_min, c_max: from sim_norm_range(); used to normalize scores to [0, 1].
+        k: number of train matches to keep per eval episode; auto-clamped to N_train.
+
+    Returns:
+        list[dict], each item shaped
+        {"eval_id": int, "top_k": [{"train_id": int, "score": float}, ...]}.
+        Outer list is sorted by eval_id ascending; inner top_k is sorted by score
+        descending with length min(k, N_train). Scores are clipped to [0, 1]
+        (ranks below the per-eval max may otherwise fall below c_min).
+    """
+    n_train = sim_matrix.shape[1]
+    k = min(k, n_train)
+    denom = c_max - c_min
+
+    top_vals, top_idx = torch.topk(sim_matrix, k, dim=1)  # 各 [N_eval, k]
+
+    result: list[dict] = []
+    for eval_id in range(sim_matrix.shape[0]):
+        matches = []
+        for rank in range(k):
+            raw = top_vals[eval_id, rank].item()
+            score = (
+                1.0 if denom < 1e-8 else min(1.0, max(0.0, (raw - c_min) / denom))
+            )
+            matches.append(
+                {"train_id": int(top_idx[eval_id, rank].item()), "score": score}
+            )
+        result.append({"eval_id": eval_id, "top_k": matches})
+    return result

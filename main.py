@@ -1,4 +1,5 @@
 import sys
+import json
 from pathlib import Path
 import torch
 from src.scaling_curve import (
@@ -7,7 +8,7 @@ from src.scaling_curve import (
     OpenPIEmbeddingExtractorJAX,
 )
 from src.scaling_curve._dataset import LeRobotDatasetLoader
-from src.scaling_curve._similarity import compute_sim_matrix, policy_embedding_similarity, sim_norm_range
+from src.scaling_curve._similarity import compute_sim_matrix, policy_embedding_similarity, sim_norm_range, top_k_train_matches
 
 
 def main():
@@ -295,6 +296,13 @@ def test_openpi_jax(checkpoint_path: str = "/root/codes/openpi/pi05_base/pi05_ba
     fig0.savefig(per_eval_path, dpi=150, bbox_inches="tight")
     print(f"      Per-eval plot saved to {per_eval_path}")
     plt.close(fig0)
+
+    # --- Top-5 train matches per eval episode ---
+    matches = top_k_train_matches(sim_matrix, c_min, c_max, k=5)
+    matches_path = "openpi_jax_top5_matches.json"
+    with open(matches_path, "w") as f:
+        json.dump(matches, f, indent=2)
+    print(f"      Top-5 train matches saved to {matches_path}")
 
     # --- Step 5: scaling curve ---
     print("[5/5] Computing scaling curve ...")
