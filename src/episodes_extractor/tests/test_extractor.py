@@ -121,6 +121,14 @@ def test_extract_round_trip(tmp_path):
     first_frame = out[0]
     assert float(first_frame["observation.state"][0]) == pytest.approx(2.0)
 
+    # within-episode frame order preserved: new episode 0 == original episode 2
+    # (length 2), so frames have frame_index 0 and 1 in order.
+    assert float(out[0]["observation.state"][1]) == pytest.approx(0.0)
+    assert float(out[1]["observation.state"][1]) == pytest.approx(1.0)
+    # new episode 1 came from original episode 0 (length 3) → state[:,0] == 0
+    # out[2] is the first frame of new episode 1 (global frame index 2)
+    assert float(out[2]["observation.state"][0]) == pytest.approx(0.0)
+
 
 def test_extract_invalid_id_raises_before_writing(tmp_path):
     src_dir = tmp_path / "src"

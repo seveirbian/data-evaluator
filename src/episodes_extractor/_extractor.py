@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections import defaultdict
 from pathlib import Path
 
@@ -86,35 +87,45 @@ def extract_episodes(
 
     src = LeRobotDataset("source", root=src_dir, episodes=sorted(episode_ids))
 
-    out = LeRobotDataset.create(
-        repo_id,
-        fps=src.fps,
-        features=_tuple_shapes(src.features),
-        root=out_dir,
-        robot_type=src.meta.robot_type,
-        use_videos=True,
-    )
+    try:
+        out = LeRobotDataset.create(
+            repo_id,
+            fps=src.fps,
+            features=_tuple_shapes(src.features),
+            root=out_dir,
+            robot_type=src.meta.robot_type,
+            use_videos=True,
+        )
 
-    feature_keys = [k for k in src.features if k not in _DEFAULT_FEATURES]
+        feature_keys = [k for k in src.features if k not in _DEFAULT_FEATURES]
 
-    # Group source global frame indices by original episode id (no video decode).
-    groups: dict[int, list[int]] = defaultdict(list)
-    for global_i, eid in enumerate(src.hf_dataset["episode_index"]):
-        groups[int(eid)].append(global_i)
+        # Group source global frame indices by original episode id.
+        # Reading the episode_index column does not decode any video.
+        groups: dict[int, list[int]] = defaultdict(list)
+        for global_i, eid in enumerate(src.hf_dataset["episode_index"]):
+            groups[int(eid)].append(global_i)
 
-    mapping: dict[int, int] = {}
-    for new_id, orig_id in enumerate(episode_ids):
-        for global_i in groups[int(orig_id)]:
-            item = src[global_i]
-            frame = {k: item[k] for k in feature_keys}
-            frame["task"] = item["task"]
-            out.add_frame(frame)
-        out.save_episode()
-        mapping[int(orig_id)] = new_id
+        mapping: dict[int, int] = {}
+        for new_id, orig_id in enumerate(episode_ids):
+            for global_i in groups[int(orig_id)]:
+                item = src[global_i]
+                # "task" is not a stored feature; it is derived per-frame from
+                # task_index by __getitem__, so it is added separately here.
+                frame = {k: item[k] for k in feature_keys}
+                frame["task"] = item["task"]
+                out.add_frame(frame)
+            out.save_episode()
+            mapping[int(orig_id)] = new_id
 
-    out.finalize()
+        out.finalize()
 
-    (out_dir / "extraction_mapping.json").write_text(
-        json.dumps({str(k): v for k, v in mapping.items()}, indent=2)
-    )
+        (out_dir / "extraction_mapping.json").write_text(
+            json.dumps({str(k): v for k, v in mapping.items()}, indent=2)
+        )
+    except BaseException:
+        # _validate_inputs guaranteed out_dir was empty/absent beforehand, so
+        # removing what we created here is safe; makes the call re-entrant.
+        shutil.rmtree(out_dir, ignore_errors=True)
+        raise
+
     return mapping
