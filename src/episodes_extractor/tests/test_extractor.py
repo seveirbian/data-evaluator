@@ -69,8 +69,8 @@ def _build_synthetic_dataset(root: Path, lengths: list[int]):
         "action": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
         "observation.images.cam": {
             "dtype": "video",
-            "shape": (3, 64, 64),
-            "names": ["channels", "height", "width"],
+            "shape": (64, 64, 3),
+            "names": ["height", "width", "channels"],
         },
     }
     ds = LeRobotDataset.create(
@@ -88,7 +88,7 @@ def _build_synthetic_dataset(root: Path, lengths: list[int]):
                 {
                     "observation.state": np.array([ep, fi], dtype=np.float32),
                     "action": np.array([ep, fi], dtype=np.float32),
-                    "observation.images.cam": np.zeros((3, 64, 64), dtype=np.float32),
+                    "observation.images.cam": np.zeros((64, 64, 3), dtype=np.float32),
                     "task": f"task{ep}",
                 }
             )

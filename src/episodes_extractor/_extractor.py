@@ -99,6 +99,10 @@ def extract_episodes(
 
         feature_keys = [k for k in src.features if k not in _DEFAULT_FEATURES]
 
+        image_keys = {
+            k for k in feature_keys if src.features[k]["dtype"] in ("image", "video")
+        }
+
         # Group source global frame indices by original episode id.
         # Reading the episode_index column does not decode any video.
         groups: dict[int, list[int]] = defaultdict(list)
@@ -109,9 +113,21 @@ def extract_episodes(
         for new_id, orig_id in enumerate(episode_ids):
             for global_i in groups[int(orig_id)]:
                 item = src[global_i]
+                frame = {}
+                for k in feature_keys:
+                    value = item[k]
+                    # Decoded video/image frames are channel-first [C,H,W], but the
+                    # stored feature shape is [H,W,C]; lerobot's frame validator runs
+                    # before its internal write-time transpose, so transpose here.
+                    if (
+                        k in image_keys
+                        and getattr(value, "ndim", 0) == 3
+                        and value.shape[0] == 3
+                    ):
+                        value = value.permute(1, 2, 0)
+                    frame[k] = value
                 # "task" is not a stored feature; it is derived per-frame from
                 # task_index by __getitem__, so it is added separately here.
-                frame = {k: item[k] for k in feature_keys}
                 frame["task"] = item["task"]
                 out.add_frame(frame)
             out.save_episode()
