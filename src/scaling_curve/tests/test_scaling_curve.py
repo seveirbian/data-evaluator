@@ -196,3 +196,12 @@ def test_top_k_matches_degenerate_range_returns_one():
     result = top_k_train_matches(sim, 0.5, 0.5, k=2)
     for m in result[0]["top_k"]:
         assert m["score"] == 1.0
+
+
+def test_top_k_matches_clips_below_range_scores_to_zero():
+    # c_min=0.5 (per-eval max), but rank-2 raw value 0.2 < c_min → must clip to 0.0
+    sim = torch.tensor([[0.5, 0.2]])
+    result = top_k_train_matches(sim, 0.5, 1.0, k=2)
+    scores = [m["score"] for m in result[0]["top_k"]]
+    assert scores[0] == pytest.approx(0.0)  # (0.5-0.5)/0.5 = 0.0
+    assert scores[1] == 0.0                  # (0.2-0.5)/0.5 = -0.6 → clipped to 0.0

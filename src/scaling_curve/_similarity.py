@@ -126,17 +126,19 @@ def top_k_train_matches(
     c_max: float,
     k: int = 5,
 ) -> list[dict]:
-    """对每个 eval episode 返回归一化分数最高的前 k 个 train episode。
+    """Return the top-k most similar train episodes for each eval episode.
 
     Args:
-        sim_matrix: [N_eval, N_train] 来自 compute_sim_matrix()。
-        c_min, c_max: 来自 sim_norm_range(),用于把分数归一化到 [0, 1]。
-        k: 每个 eval episode 保留的 train 匹配数,自动 clamp 到 N_train。
+        sim_matrix: [N_eval, N_train] from compute_sim_matrix().
+        c_min, c_max: from sim_norm_range(); used to normalize scores to [0, 1].
+        k: number of train matches to keep per eval episode; auto-clamped to N_train.
 
     Returns:
-        list[dict],每项形如
-        {"eval_id": int, "top_k": [{"train_id": int, "score": float}, ...]}。
-        外层按 eval_id 升序,内层 top_k 按 score 降序,长度为 min(k, N_train)。
+        list[dict], each item shaped
+        {"eval_id": int, "top_k": [{"train_id": int, "score": float}, ...]}.
+        Outer list is sorted by eval_id ascending; inner top_k is sorted by score
+        descending with length min(k, N_train). Scores are clipped to [0, 1]
+        (ranks below the per-eval max may otherwise fall below c_min).
     """
     n_train = sim_matrix.shape[1]
     k = min(k, n_train)
@@ -149,7 +151,9 @@ def top_k_train_matches(
         matches = []
         for rank in range(k):
             raw = top_vals[eval_id, rank].item()
-            score = 1.0 if denom < 1e-8 else (raw - c_min) / denom
+            score = (
+                1.0 if denom < 1e-8 else min(1.0, max(0.0, (raw - c_min) / denom))
+            )
             matches.append(
                 {"train_id": int(top_idx[eval_id, rank].item()), "score": score}
             )
