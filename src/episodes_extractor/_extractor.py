@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections import defaultdict
 from pathlib import Path
 
 
@@ -67,31 +66,28 @@ def extract_episodes(
     out_dir: str | Path,
     repo_id: str = "extracted",
     image_writer_threads: int = 4,
-    image_writer_processes: int = 0,
 ) -> dict[int, int]:
     """Extract selected episodes into a new LeRobot v3.0 dataset.
 
+    Output episodes are renumbered 0..K-1 in ascending source order; the input
+    order of ``episode_ids`` does not matter.
+
     Args:
         src_dir: source v3.0 dataset root.
-        episode_ids: original episode ids to keep; list order defines new ids
-            (new episode_index = position in this list).
+        episode_ids: original episode ids to keep.
         out_dir: output dataset root (must be empty or non-existent).
         repo_id: repo id for the output dataset.
-        image_writer_threads: threads used by lerobot to write per-frame PNGs in
-            the background. At the default of 0 lerobot writes them synchronously,
-            which dominates wall-time for high-resolution frames; >0 parallelizes
-            it. Defaults to 4.
-        image_writer_processes: processes for the image writer (in addition to
-            threads). 0 keeps writing in-process. Defaults to 0.
+        image_writer_threads: threads lerobot uses to write per-frame PNGs in the
+            background. At 0 it writes them synchronously, which dominates
+            wall-time for high-resolution frames; >0 parallelizes it. Defaults to 4.
 
     Returns:
-        {original_episode_id: new_episode_id}.
+        {original_episode_id: new_episode_id}, new ids in ascending source order.
 
     Note:
-        Source-video decode (~tens of ms/frame) and AV1 re-encode of the output
-        are inherent to this re-encoding approach and are not removed by the
-        knobs above; those knobs parallelize/​amortize the PNG-writing and
-        encode-invocation overhead around them.
+        Source-video decode and AV1 re-encode of the output are inherent to this
+        re-encoding approach; ``image_writer_threads`` only parallelizes the
+        PNG-writing around them.
     """
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -99,7 +95,9 @@ def extract_episodes(
     out_dir = Path(out_dir)
     _validate_inputs(src_dir, episode_ids, out_dir)
 
-    src = LeRobotDataset("source", root=src_dir, episodes=sorted(episode_ids))
+    ids = sorted(episode_ids)
+    wanted = set(ids)
+    src = LeRobotDataset("source", root=src_dir)
 
     try:
         out = LeRobotDataset.create(
@@ -110,47 +108,48 @@ def extract_episodes(
             robot_type=src.meta.robot_type,
             use_videos=True,
             image_writer_threads=image_writer_threads,
-            image_writer_processes=image_writer_processes,
         )
 
         feature_keys = [k for k in src.features if k not in _DEFAULT_FEATURES]
-
         image_keys = {
             k for k in feature_keys if src.features[k]["dtype"] in ("image", "video")
         }
 
-        # Group source global frame indices by original episode id.
-        # Reading the episode_index column does not decode any video.
-        groups: dict[int, list[int]] = defaultdict(list)
-        for global_i, eid in enumerate(src.hf_dataset["episode_index"]):
-            groups[int(eid)].append(global_i)
-
-        mapping: dict[int, int] = {}
-        for new_id, orig_id in enumerate(episode_ids):
-            for global_i in groups[int(orig_id)]:
-                item = src[global_i]
-                frame = {}
-                for k in feature_keys:
-                    value = item[k]
-                    # Decoded video/image frames are channel-first [C,H,W], but the
-                    # stored feature shape is [H,W,C]; lerobot's frame validator runs
-                    # before its internal write-time transpose, so transpose here.
-                    if (
-                        k in image_keys
-                        and getattr(value, "ndim", 0) == 3
-                        and value.shape[0] == 3
-                    ):
-                        value = value.permute(1, 2, 0)
-                    frame[k] = value
-                # "task" is not a stored feature; it is derived per-frame from
-                # task_index by __getitem__, so it is added separately here.
-                frame["task"] = item["task"]
-                out.add_frame(frame)
-            out.save_episode()
-            mapping[int(orig_id)] = new_id
-
+        # Frames are stored in ascending episode order, contiguous per episode.
+        # Walk them linearly, keep only wanted episodes, and close an output
+        # episode whenever the (wanted) episode_index changes. The episode_index
+        # column is read without decoding video, so skipping is cheap.
+        ep_col = src.hf_dataset["episode_index"]
+        prev_ep = None
+        for i in range(len(src)):
+            ep = int(ep_col[i])
+            if ep not in wanted:
+                continue
+            if prev_ep is not None and ep != prev_ep:
+                out.save_episode()
+            item = src[i]
+            frame = {}
+            for k in feature_keys:
+                value = item[k]
+                # Decoded video/image frames are channel-first [C,H,W], but the
+                # stored feature shape is [H,W,C]; lerobot's frame validator runs
+                # before its internal write-time transpose, so transpose here.
+                if (
+                    k in image_keys
+                    and getattr(value, "ndim", 0) == 3
+                    and value.shape[0] == 3
+                ):
+                    value = value.permute(1, 2, 0)
+                frame[k] = value
+            # "task" is not a stored feature; it is derived per-frame from
+            # task_index by __getitem__, so it is added separately here.
+            frame["task"] = item["task"]
+            out.add_frame(frame)
+            prev_ep = ep
+        out.save_episode()  # flush the final episode
         out.finalize()
 
+        mapping = {orig: new for new, orig in enumerate(ids)}
         (out_dir / "extraction_mapping.json").write_text(
             json.dumps({str(k): v for k, v in mapping.items()}, indent=2)
         )

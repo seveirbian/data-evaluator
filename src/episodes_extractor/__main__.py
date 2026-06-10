@@ -34,12 +34,6 @@ def main() -> None:
         default=4,
         help="threads for background PNG writing (0 = synchronous, slower)",
     )
-    parser.add_argument(
-        "--image-writer-processes",
-        type=int,
-        default=0,
-        help="processes for the image writer (default 0)",
-    )
     args = parser.parse_args()
 
     episode_ids = _read_episode_ids(args.episodes)
@@ -49,7 +43,6 @@ def main() -> None:
         args.out,
         repo_id=args.repo_id,
         image_writer_threads=args.image_writer_threads,
-        image_writer_processes=args.image_writer_processes,
     )
     print(f"Extracted {len(mapping)} episodes to {args.out}")
     print(f"id mapping (original -> new): {mapping}")

@@ -49,7 +49,6 @@ python -m src.episodes_extractor \
 | `--out` | 必填 | 输出数据集目录,必须为空或不存在。 |
 | `--repo-id` | `extracted` | 输出数据集的 repo id。 |
 | `--image-writer-threads` | `4` | 后台写 PNG 帧的线程数。`0` 为同步写入,高分辨率下会显著拖慢;`>0` 并行化。 |
-| `--image-writer-processes` | `0` | 图像写入进程数(在线程之外另开进程)。 |
 
 ---
 
@@ -60,15 +59,15 @@ from src.episodes_extractor import extract_episodes
 
 mapping = extract_episodes(
     src_dir="path/to/v3_dataset",
-    episode_ids=[5, 0, 12],     # 列表顺序决定新 id:5→0, 0→1, 12→2
+    episode_ids=[5, 0, 12],     # 输入顺序无所谓,按源升序编号
     out_dir="path/to/output",
     repo_id="extracted",
     image_writer_threads=4,
 )
-# mapping == {5: 0, 0: 1, 12: 2}
+# mapping == {0: 0, 5: 1, 12: 2}
 ```
 
-**新 episode_index = 该原始 id 在 `episode_ids` 列表中的下标**(保留用户给定顺序,而非排序顺序)。
+**新 episode_index 按源数据集升序连续编号**(`0..K-1`),输入 `episode_ids` 的顺序不影响结果;原始 id 与新 id 的对应记录在 `extraction_mapping.json`。
 
 ---
 
@@ -81,7 +80,7 @@ out/
 ├── data/ …                       # 重新打包、重新连续编号的 parquet
 ├── videos/ …                     # 只含选定 episode 的视频
 ├── meta/info.json …              # total_episodes / total_frames 等已更新
-└── extraction_mapping.json       # {"5": 0, "0": 1, "12": 2}  原始id→新id
+└── extraction_mapping.json       # {"0": 0, "5": 1, "12": 2}  原始id→新id
 ```
 
 `extract_episodes` 的返回值与 `extraction_mapping.json` 内容一致(返回值用 int 作 key,JSON 中 key 为字符串)。

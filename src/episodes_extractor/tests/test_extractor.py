@@ -103,31 +103,30 @@ def test_extract_round_trip(tmp_path):
     _build_synthetic_dataset(src_dir, lengths=[3, 4, 2])  # episodes 0,1,2
 
     out_dir = tmp_path / "out"
-    # Extract episodes 2 and 0, in that order → new ids 0 and 1 respectively
+    # Extract episodes 2 and 0; new ids follow ASCENDING source order → 0→0, 2→1.
+    # Input order does not matter.
     mapping = extract_episodes(src_dir, [2, 0], out_dir, repo_id="extracted")
 
-    assert mapping == {2: 0, 0: 1}
+    assert mapping == {0: 0, 2: 1}
 
     out = LeRobotDataset("extracted", root=out_dir)
     assert out.num_episodes == 2
-    assert out.num_frames == 2 + 3  # episode 2 (len 2) + episode 0 (len 3)
+    assert out.num_frames == 3 + 2  # episode 0 (len 3) + episode 2 (len 2)
 
     # mapping file written
     mapping_file = out_dir / "extraction_mapping.json"
     assert mapping_file.exists()
-    assert json.loads(mapping_file.read_text()) == {"2": 0, "0": 1}
+    assert json.loads(mapping_file.read_text()) == {"0": 0, "2": 1}
 
-    # new episode 0 came from original episode 2 → state[:,0] == 2
-    first_frame = out[0]
-    assert float(first_frame["observation.state"][0]) == pytest.approx(2.0)
-
-    # within-episode frame order preserved: new episode 0 == original episode 2
-    # (length 2), so frames have frame_index 0 and 1 in order.
+    # new episode 0 came from original episode 0 → state[:,0] == 0
+    assert float(out[0]["observation.state"][0]) == pytest.approx(0.0)
+    # within-episode frame order preserved (frame_index 0,1,2 for original ep 0)
     assert float(out[0]["observation.state"][1]) == pytest.approx(0.0)
     assert float(out[1]["observation.state"][1]) == pytest.approx(1.0)
-    # new episode 1 came from original episode 0 (length 3) → state[:,0] == 0
-    # out[2] is the first frame of new episode 1 (global frame index 2)
-    assert float(out[2]["observation.state"][0]) == pytest.approx(0.0)
+    # new episode 1 came from original episode 2 → out[3] is its first frame
+    # (global frame index 3 = after original ep 0's three frames) → state[:,0] == 2
+    assert float(out[3]["observation.state"][0]) == pytest.approx(2.0)
+    assert float(out[3]["observation.state"][1]) == pytest.approx(0.0)
 
 
 def test_extract_invalid_id_raises_before_writing(tmp_path):
@@ -145,7 +144,7 @@ def test_extract_round_trip_with_parallel_image_writer(tmp_path):
     _build_synthetic_dataset(src_dir, lengths=[2, 3])  # episodes 0,1
 
     out_dir = tmp_path / "out"
-    # Performance knobs must not change extraction results.
+    # Performance knob must not change extraction results.
     mapping = extract_episodes(
         src_dir,
         [1, 0],
@@ -153,12 +152,13 @@ def test_extract_round_trip_with_parallel_image_writer(tmp_path):
         image_writer_threads=2,
     )
 
-    assert mapping == {1: 0, 0: 1}
+    # ascending order → {0: 0, 1: 1}
+    assert mapping == {0: 0, 1: 1}
     out = LeRobotDataset("extracted", root=out_dir)
     assert out.num_episodes == 2
-    assert out.num_frames == 3 + 2
-    # new episode 0 came from original episode 1 → state[:,0] == 1
-    assert float(out[0]["observation.state"][0]) == pytest.approx(1.0)
+    assert out.num_frames == 2 + 3
+    # new episode 0 came from original episode 0 → state[:,0] == 0
+    assert float(out[0]["observation.state"][0]) == pytest.approx(0.0)
 
 
 from src.episodes_extractor.__main__ import _read_episode_ids
