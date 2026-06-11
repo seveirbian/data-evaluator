@@ -127,3 +127,19 @@ def test_extract_first_obs_invalid_id_raises(tmp_path):
     out_path = tmp_path / "out" / "first_obs.png"
     with pytest.raises(ValueError, match="out of range"):
         extract_first_obs(src_dir, [0, 9], out_path)
+
+
+from src.first_obs_extractor.__main__ import _read_episode_ids
+
+
+def test_read_episode_ids_from_json(tmp_path):
+    p = tmp_path / "ids.json"
+    p.write_text(json.dumps({"episode_ids": [3, 1, 4]}))
+    assert _read_episode_ids(p) == [3, 1, 4]
+
+
+def test_read_episode_ids_missing_key_raises(tmp_path):
+    p = tmp_path / "ids.json"
+    p.write_text(json.dumps({"wrong_key": [1, 2]}))
+    with pytest.raises(ValueError, match="episode_ids"):
+        _read_episode_ids(p)
