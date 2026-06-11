@@ -70,3 +70,60 @@ def test_render_montage_writes_png(tmp_path):
     assert result == out
     assert out.exists()
     assert out.stat().st_size > 0
+
+
+from src.first_obs_extractor._extractor import extract_first_obs
+
+
+def _build_synthetic_dataset(root: Path, lengths: list[int]):
+    """Create a small v3.0 dataset with len(lengths) episodes, one camera."""
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    features = {
+        "observation.state": {"dtype": "float32", "shape": (2,), "names": ["a", "b"]},
+        "observation.images.cam": {
+            "dtype": "video",
+            "shape": (64, 64, 3),
+            "names": ["height", "width", "channels"],
+        },
+    }
+    ds = LeRobotDataset.create(
+        "synthetic",
+        fps=10,
+        features=features,
+        root=root,
+        robot_type="test",
+        use_videos=True,
+        video_backend="pyav",
+    )
+    for ep, length in enumerate(lengths):
+        for fi in range(length):
+            ds.add_frame(
+                {
+                    "observation.state": np.array([ep, fi], dtype=np.float32),
+                    "observation.images.cam": np.zeros((64, 64, 3), dtype=np.float32),
+                    "task": f"task{ep}",
+                }
+            )
+        ds.save_episode()
+    ds.finalize()
+
+
+def test_extract_first_obs_writes_montage(tmp_path):
+    src_dir = tmp_path / "src"
+    _build_synthetic_dataset(src_dir, lengths=[2, 2, 2])  # episodes 0,1,2
+
+    out_path = tmp_path / "out" / "first_obs.png"
+    result = extract_first_obs(src_dir, [2, 0], out_path)
+
+    assert result == out_path
+    assert out_path.exists()
+    assert out_path.stat().st_size > 0
+
+
+def test_extract_first_obs_invalid_id_raises(tmp_path):
+    src_dir = tmp_path / "src"
+    _build_synthetic_dataset(src_dir, lengths=[2, 2])  # episodes 0,1
+    out_path = tmp_path / "out" / "first_obs.png"
+    with pytest.raises(ValueError, match="out of range"):
+        extract_first_obs(src_dir, [0, 9], out_path)

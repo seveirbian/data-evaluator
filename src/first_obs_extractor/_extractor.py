@@ -38,8 +38,39 @@ def _validate_episode_ids(src_dir: str | Path, episode_ids: list[int]) -> int:
     return total_episodes
 
 
-def extract_first_obs(src_dir, episode_ids, out_path):
-    raise NotImplementedError("Implemented in a later task.")
+def extract_first_obs(
+    src_dir: str | Path,
+    episode_ids: list[int],
+    out_path: str | Path,
+) -> Path:
+    """Tile the first-frame observations of selected episodes into one PNG.
+
+    Args:
+        src_dir: LeRobot v2.0/v3.0 dataset root.
+        episode_ids: episode ids to include; output cells follow this order,
+            then cameras in sorted key order.
+        out_path: output PNG path (overwritten if it exists).
+
+    Returns:
+        Path(out_path).
+    """
+    from src.dataset_io import LeRobotDatasetLoader
+
+    src_dir = Path(src_dir)
+    _validate_episode_ids(src_dir, episode_ids)
+
+    loader = LeRobotDatasetLoader(src_dir)
+    observations = loader.get_initial_observations()
+    cameras = sorted(loader.camera_keys)
+
+    cells: list[tuple[str, object]] = []
+    for ep_id in episode_ids:
+        ep_obs = observations[ep_id]
+        for cam in cameras:
+            short = cam.split(".")[-1]
+            cells.append((f"ep{ep_id} / {short}", ep_obs[cam]))
+
+    return _render_montage(cells, out_path)
 
 
 def _to_hwc_image(value) -> np.ndarray:
