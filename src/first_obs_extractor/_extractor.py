@@ -4,6 +4,8 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
+
 
 def _grid_dims(n: int) -> tuple[int, int]:
     """Near-square grid: returns (rows, cols) for n cells."""
@@ -38,3 +40,47 @@ def _validate_episode_ids(src_dir: str | Path, episode_ids: list[int]) -> int:
 
 def extract_first_obs(src_dir, episode_ids, out_path):
     raise NotImplementedError("Implemented in a later task.")
+
+
+def _to_hwc_image(value) -> np.ndarray:
+    """Convert a torch tensor / numpy array image to a HWC numpy array.
+
+    Decoded video frames are channel-first [C,H,W]; matplotlib's imshow wants
+    [H,W,C]. Float images are left in [0,1] (clipped) for imshow.
+    """
+    arr = value
+    if hasattr(arr, "detach"):  # torch tensor
+        arr = arr.detach().cpu().numpy()
+    arr = np.asarray(arr)
+    if arr.ndim == 3 and arr.shape[0] == 3:  # CHW -> HWC
+        arr = np.transpose(arr, (1, 2, 0))
+    if arr.dtype.kind == "f":
+        arr = np.clip(arr, 0.0, 1.0)
+    return arr
+
+
+def _render_montage(cells: list[tuple[str, object]], out_path: str | Path) -> Path:
+    """Render labelled first-frame cells into a near-square montage PNG."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    n = len(cells)
+    rows, cols = _grid_dims(n)
+    fig, axes = plt.subplots(
+        rows, cols, figsize=(cols * 3, rows * 3), squeeze=False
+    )
+    for idx in range(rows * cols):
+        ax = axes[idx // cols][idx % cols]
+        ax.axis("off")
+        if idx < n:
+            label, image = cells[idx]
+            ax.imshow(_to_hwc_image(image))
+            ax.set_title(label, fontsize=8)
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_path

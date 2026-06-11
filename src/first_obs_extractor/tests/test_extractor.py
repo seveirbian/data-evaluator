@@ -51,3 +51,22 @@ def test_validate_rejects_missing_info_json(tmp_path):
 def test_validate_passes_for_valid_inputs(tmp_path):
     src = _make_src(tmp_path, 5)
     assert _validate_episode_ids(src, [0, 2, 4]) == 5
+
+
+import numpy as np
+
+from src.first_obs_extractor._extractor import _render_montage
+
+
+def test_render_montage_writes_png(tmp_path):
+    # mix of HWC (numpy) and CHW (channel-first) float images
+    hwc = np.zeros((8, 8, 3), dtype=np.float32)
+    chw = np.ones((3, 8, 8), dtype=np.float32)
+    cells = [("ep0 / front", hwc), ("ep1 / front", chw)]
+    out = tmp_path / "sub" / "montage.png"
+
+    result = _render_montage(cells, out)
+
+    assert result == out
+    assert out.exists()
+    assert out.stat().st_size > 0
