@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from ._dataset import LeRobotDatasetLoader
+from src.dataset_io import LeRobotDatasetLoader
 from ._embeddings import PolicyEmbeddingExtractor
 from ._similarity import compute_sim_matrix, policy_embedding_similarity, sim_norm_range
 

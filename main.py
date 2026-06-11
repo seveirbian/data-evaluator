@@ -7,7 +7,7 @@ from src.scaling_curve import (
     OpenPIEmbeddingExtractor,
     OpenPIEmbeddingExtractorJAX,
 )
-from src.scaling_curve._dataset import LeRobotDatasetLoader
+from src.dataset_io import LeRobotDatasetLoader
 from src.scaling_curve._similarity import compute_sim_matrix, policy_embedding_similarity, sim_norm_range, top_k_train_matches
 
 
