@@ -28,30 +28,79 @@ class LeRobotDatasetLoader:
         ]
 
     def get_initial_observations(self) -> list[dict[str, torch.Tensor]]:
-        """Return one observation dict per episode (frame_index == 0)."""
+        """Return one observation dict per episode (frame_index == 0), in episode order."""
+        if self.version == "v2.0":
+            return self._initial_observations_v2()
+        return self._initial_observations_v3()
+
+    def _first_frame_states(self) -> dict[int, "pd.Series"]:
+        """Map episode_index -> the frame_index==0 data row (for state features)."""
+        import pandas as pd
+
+        states: dict[int, pd.Series] = {}
+        for parquet_path in sorted(self.root.glob("data/**/*.parquet")):
+            df = pd.read_parquet(parquet_path)
+            fi = df["frame_index"].apply(
+                lambda x: int(x[0]) if hasattr(x, "__len__") else int(x)
+            )
+            for _, row in df[fi == 0].iterrows():
+                ei = row["episode_index"]
+                ei = int(ei[0]) if hasattr(ei, "__len__") else int(ei)
+                states[ei] = row
+        return states
+
+    def _initial_observations_v3(self) -> list[dict[str, torch.Tensor]]:
+        """v3.0: locate each camera's first frame via meta/episodes.
+
+        Multiple episodes share a video file, and each camera is partitioned and
+        timestamped independently. The authoritative location of an episode's first
+        frame in a given camera's video is ``meta/episodes`` -> ``videos/<cam>/
+        {chunk_index,file_index}`` (which file) + ``from_timestamp`` (where in it).
+        Deriving it from the data-parquet row position instead is wrong whenever the
+        video partitioning differs from the data partitioning or between cameras.
+        """
+        import pandas as pd
+
+        ep_meta = pd.concat(
+            [pd.read_parquet(p) for p in sorted(self.root.glob("meta/episodes/**/*.parquet"))],
+            ignore_index=True,
+        ).sort_values("episode_index")
+
+        video_template = self.info["video_path"]
+        states = self._first_frame_states()
+
+        observations = []
+        for _, em in ep_meta.iterrows():
+            ei = int(em["episode_index"])
+            obs: dict[str, torch.Tensor] = {}
+            for cam in self.camera_keys:
+                chunk_index = int(em[f"videos/{cam}/chunk_index"])
+                file_index = int(em[f"videos/{cam}/file_index"])
+                from_timestamp = float(em[f"videos/{cam}/from_timestamp"])
+                video_path = self.root / video_template.format(
+                    video_key=cam, chunk_index=chunk_index, file_index=file_index
+                )
+                obs[cam] = self._load_video_frame_at_timestamp(video_path, from_timestamp)
+            row = states[ei]
+            for key in self.state_keys:
+                obs[key] = torch.tensor(row[key], dtype=torch.float32)
+            observations.append(obs)
+
+        return observations
+
+    def _initial_observations_v2(self) -> list[dict[str, torch.Tensor]]:
+        """v2.0: one video per episode; the initial frame is always video frame 0."""
         import pandas as pd
 
         observations = []
         for parquet_path in sorted(self.root.glob("data/**/*.parquet")):
             df = pd.read_parquet(parquet_path)
-
-            # frame_index may be stored as scalar (v3.0) or shape-[1] array (v2.0)
-            fi_series = df["frame_index"].apply(
+            fi = df["frame_index"].apply(
                 lambda x: int(x[0]) if hasattr(x, "__len__") else int(x)
             )
-
-            for frame_pos in df.index[fi_series == 0]:
-                if self.version == "v2.0":
-                    # Each episode has its own video; initial frame is always video frame 0
-                    video_frame_idx = 0
-                    video_path_fn = lambda cam, p=parquet_path: self._video_path_v2(p, cam)
-                else:
-                    # Multiple episodes share a video; iloc position = video frame number
-                    video_frame_idx = df.index.get_loc(frame_pos)
-                    video_path_fn = lambda cam, p=parquet_path: self._video_path_v3(p, cam)
-
+            for frame_pos in df.index[fi == 0]:
                 obs = {
-                    cam: self._load_video_frame_at(video_path_fn(cam), video_frame_idx)
+                    cam: self._load_video_frame_at(self._video_path_v2(parquet_path, cam), 0)
                     for cam in self.camera_keys
                 }
                 row = df.loc[frame_pos]
@@ -60,11 +109,6 @@ class LeRobotDatasetLoader:
                 observations.append(obs)
 
         return observations
-
-    def _video_path_v3(self, parquet_path: Path, cam_key: str) -> Path:
-        """v3.0: videos/{cam_key}/chunk-000/file-000.mp4"""
-        rel = parquet_path.relative_to(self.root)
-        return self.root / "videos" / cam_key / rel.parts[1] / rel.name.replace(".parquet", ".mp4")
 
     def _video_path_v2(self, parquet_path: Path, cam_key: str) -> Path:
         """v2.0: videos/chunk-000/{cam_key}/episode_000000.mp4"""
@@ -84,3 +128,33 @@ class LeRobotDatasetLoader:
                 return torch.from_numpy(frame.to_ndarray(format="rgb24")).permute(2, 0, 1).float() / 255.0
 
         raise ValueError(f"Frame {frame_idx} not found in {video_path}")
+
+    def _load_video_frame_at_timestamp(
+        self, video_path: Path, timestamp: float
+    ) -> torch.Tensor:
+        """Decode the exact frame at ``timestamp`` seconds.
+
+        Seeks to a keyframe at or before the target, then decodes forward to the
+        first frame whose presentation time reaches ``timestamp`` (rather than
+        returning the keyframe, which may belong to a previous episode).
+        """
+        import av
+
+        with av.open(str(video_path)) as container:
+            stream = container.streams.video[0]
+            if timestamp > 0:
+                container.seek(int(max(0.0, timestamp - 0.5) * 1_000_000))
+            last = None
+            for frame in container.decode(stream):
+                last = frame
+                if frame.time is not None and frame.time + 1e-4 >= timestamp:
+                    break
+            if last is not None:
+                return (
+                    torch.from_numpy(last.to_ndarray(format="rgb24"))
+                    .permute(2, 0, 1)
+                    .float()
+                    / 255.0
+                )
+
+        raise ValueError(f"No frame at t={timestamp}s in {video_path}")
