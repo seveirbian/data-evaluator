@@ -44,7 +44,7 @@ def test_validate_rejects_out_of_range_ids(tmp_path):
 def test_validate_rejects_missing_info_json(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
-    with pytest.raises((FileNotFoundError, ValueError)):
+    with pytest.raises(FileNotFoundError):
         _validate_episode_ids(src, [0])
 
 
