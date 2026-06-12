@@ -71,3 +71,55 @@ def test_v3_first_frame_follows_meta_not_data_row_position(tmp_path):
     # Episode first frames are still global 0,4,8 -> gray 0,80,160. The buggy loader
     # used data-row position and returned 0,40,120 instead.
     assert _first_frame_grays(root) == pytest.approx([0, 80, 160], abs=8)
+
+
+def _reencode_single_keyframe(video_path: Path):
+    """Re-encode a video so only frame 0 is a keyframe (every other frame mid-GOP).
+
+    Decodes the existing frames and re-encodes them as fresh ndarray frames with a
+    huge GOP and no B-frames, so later episode-start frames are NOT on a keyframe.
+    """
+    import av
+
+    inp = av.open(str(video_path))
+    ins = inp.streams.video[0]
+    arrays = [fr.to_ndarray(format="rgb24") for fr in inp.decode(ins)]
+    w, h = ins.width, ins.height
+    inp.close()
+
+    tmp = str(video_path) + ".tmp.mp4"
+    out = av.open(tmp, "w")
+    stream = out.add_stream("libx264", rate=10)
+    stream.width, stream.height, stream.pix_fmt = w, h, "yuv420p"
+    stream.codec_context.gop_size = 1000
+    stream.codec_context.max_b_frames = 0
+    for arr in arrays:
+        frame = av.VideoFrame.from_ndarray(arr, format="rgb24")
+        for pkt in stream.encode(frame):
+            out.mux(pkt)
+    for pkt in stream.encode():
+        out.mux(pkt)
+    out.close()
+    import shutil
+
+    shutil.move(tmp, str(video_path))
+
+
+def test_v3_first_frame_correct_when_episode_start_not_keyframe(tmp_path):
+    """Universality guard: episode-start frames that are NOT keyframes must still
+    decode to the exact frame (seek to keyframe <= from_timestamp, decode forward)."""
+    import av
+
+    root = tmp_path / "ds"
+    _build_gray_dataset(root, lengths=[4, 4, 4])  # ep starts at global frames 0,4,8
+    vf = sorted(glob.glob(str(root / "videos/**/*.mp4"), recursive=True))[0]
+    _reencode_single_keyframe(Path(vf))
+
+    # sanity: only frame 0 is a keyframe, so episode starts 4 and 8 are mid-GOP
+    c = av.open(vf)
+    kf = [i for i, fr in enumerate(c.decode(c.streams.video[0])) if fr.key_frame]
+    c.close()
+    assert kf == [0], f"fixture not mid-GOP: keyframes={kf}"
+
+    # Despite starts 4,8 being non-keyframes, the loader returns the exact frames.
+    assert _first_frame_grays(root) == pytest.approx([0, 80, 160], abs=8)

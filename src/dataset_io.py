@@ -69,18 +69,35 @@ class LeRobotDatasetLoader:
         video_template = self.info["video_path"]
         states = self._first_frame_states()
 
-        observations = []
-        for _, em in ep_meta.iterrows():
-            ei = int(em["episode_index"])
-            obs: dict[str, torch.Tensor] = {}
-            for cam in self.camera_keys:
-                chunk_index = int(em[f"videos/{cam}/chunk_index"])
-                file_index = int(em[f"videos/{cam}/file_index"])
-                from_timestamp = float(em[f"videos/{cam}/from_timestamp"])
+        ep_order = [int(em["episode_index"]) for _, em in ep_meta.iterrows()]
+        obs_by_ep: dict[int, dict[str, torch.Tensor]] = {ei: {} for ei in ep_order}
+
+        # Group episodes by (camera, video file) so each shared video file is opened
+        # ONCE — re-opening a large shared file per episode dominates wall-time for
+        # many-episode datasets.
+        for cam in self.camera_keys:
+            by_file: dict[str, list[tuple[float, int]]] = {}
+            for _, em in ep_meta.iterrows():
+                ei = int(em["episode_index"])
                 video_path = self.root / video_template.format(
-                    video_key=cam, chunk_index=chunk_index, file_index=file_index
+                    video_key=cam,
+                    chunk_index=int(em[f"videos/{cam}/chunk_index"]),
+                    file_index=int(em[f"videos/{cam}/file_index"]),
                 )
-                obs[cam] = self._load_video_frame_at_timestamp(video_path, from_timestamp)
+                ts = float(em[f"videos/{cam}/from_timestamp"])
+                by_file.setdefault(str(video_path), []).append((ts, ei))
+
+            for video_path, items in by_file.items():
+                items.sort()  # ascending timestamp
+                frames = self._decode_frames_at_timestamps(
+                    Path(video_path), [ts for ts, _ in items]
+                )
+                for (_, ei), frame in zip(items, frames):
+                    obs_by_ep[ei][cam] = frame
+
+        observations = []
+        for ei in ep_order:
+            obs = obs_by_ep[ei]
             row = states[ei]
             for key in self.state_keys:
                 obs[key] = torch.tensor(row[key], dtype=torch.float32)
@@ -129,32 +146,35 @@ class LeRobotDatasetLoader:
 
         raise ValueError(f"Frame {frame_idx} not found in {video_path}")
 
-    def _load_video_frame_at_timestamp(
-        self, video_path: Path, timestamp: float
-    ) -> torch.Tensor:
-        """Decode the exact frame at ``timestamp`` seconds.
+    def _decode_frames_at_timestamps(
+        self, video_path: Path, timestamps: list[float]
+    ) -> list[torch.Tensor]:
+        """Decode the exact frame at each timestamp, opening the file only once.
 
-        Seeks to a keyframe at or before the target, then decodes forward to the
-        first frame whose presentation time reaches ``timestamp`` (rather than
-        returning the keyframe, which may belong to a previous episode).
+        For every timestamp: seek to the keyframe at or before it, then decode
+        forward to the first frame whose presentation time reaches the timestamp.
+        Seeking directly to the target (rather than an arbitrary margin before it)
+        decodes the minimum number of frames; the returned frame is identical
+        either way since the decode-forward endpoint is fixed by the timestamp.
         """
         import av
 
+        frames: list[torch.Tensor] = []
         with av.open(str(video_path)) as container:
             stream = container.streams.video[0]
-            if timestamp > 0:
-                container.seek(int(max(0.0, timestamp - 0.5) * 1_000_000))
-            last = None
-            for frame in container.decode(stream):
-                last = frame
-                if frame.time is not None and frame.time + 1e-4 >= timestamp:
-                    break
-            if last is not None:
-                return (
+            for timestamp in timestamps:
+                container.seek(int(max(0.0, timestamp) * 1_000_000))
+                last = None
+                for frame in container.decode(stream):
+                    last = frame
+                    if frame.time is not None and frame.time + 1e-4 >= timestamp:
+                        break
+                if last is None:
+                    raise ValueError(f"No frame at t={timestamp}s in {video_path}")
+                frames.append(
                     torch.from_numpy(last.to_ndarray(format="rgb24"))
                     .permute(2, 0, 1)
                     .float()
                     / 255.0
                 )
-
-        raise ValueError(f"No frame at t={timestamp}s in {video_path}")
+        return frames
