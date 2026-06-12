@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 
 
 class LeRobotDatasetLoader:
@@ -27,11 +28,18 @@ class LeRobotDatasetLoader:
             if k.startswith("observation.") and v.get("dtype") != "video"
         ]
 
-    def get_initial_observations(self) -> list[dict[str, torch.Tensor]]:
-        """Return one observation dict per episode (frame_index == 0), in episode order."""
+    def get_initial_observations(
+        self, progress: bool = True
+    ) -> list[dict[str, torch.Tensor]]:
+        """Return one observation dict per episode (frame_index == 0), in episode order.
+
+        Args:
+            progress: show a tqdm progress bar while decoding first frames (the slow
+                part for large datasets). Set False to silence it.
+        """
         if self.version == "v2.0":
-            return self._initial_observations_v2()
-        return self._initial_observations_v3()
+            return self._initial_observations_v2(progress)
+        return self._initial_observations_v3(progress)
 
     def _first_frame_states(self) -> dict[int, "pd.Series"]:
         """Map episode_index -> the frame_index==0 data row (for state features)."""
@@ -49,7 +57,7 @@ class LeRobotDatasetLoader:
                 states[ei] = row
         return states
 
-    def _initial_observations_v3(self) -> list[dict[str, torch.Tensor]]:
+    def _initial_observations_v3(self, progress: bool = True) -> list[dict[str, torch.Tensor]]:
         """v3.0: locate each camera's first frame via meta/episodes.
 
         Multiple episodes share a video file, and each camera is partitioned and
@@ -72,6 +80,12 @@ class LeRobotDatasetLoader:
         ep_order = [int(em["episode_index"]) for _, em in ep_meta.iterrows()]
         obs_by_ep: dict[int, dict[str, torch.Tensor]] = {ei: {} for ei in ep_order}
 
+        pbar = tqdm(
+            total=len(ep_order) * len(self.camera_keys),
+            desc="Reading first frames",
+            unit="frame",
+            disable=not progress,
+        )
         # Group episodes by (camera, video file) so each shared video file is opened
         # ONCE — re-opening a large shared file per episode dominates wall-time for
         # many-episode datasets.
@@ -90,10 +104,11 @@ class LeRobotDatasetLoader:
             for video_path, items in by_file.items():
                 items.sort()  # ascending timestamp
                 frames = self._decode_frames_at_timestamps(
-                    Path(video_path), [ts for ts, _ in items]
+                    Path(video_path), [ts for ts, _ in items], pbar=pbar
                 )
                 for (_, ei), frame in zip(items, frames):
                     obs_by_ep[ei][cam] = frame
+        pbar.close()
 
         observations = []
         for ei in ep_order:
@@ -105,25 +120,35 @@ class LeRobotDatasetLoader:
 
         return observations
 
-    def _initial_observations_v2(self) -> list[dict[str, torch.Tensor]]:
+    def _initial_observations_v2(self, progress: bool = True) -> list[dict[str, torch.Tensor]]:
         """v2.0: one video per episode; the initial frame is always video frame 0."""
         import pandas as pd
 
+        parquet_paths = sorted(self.root.glob("data/**/*.parquet"))
+        pbar = tqdm(
+            total=len(parquet_paths) * len(self.camera_keys),
+            desc="Reading first frames",
+            unit="frame",
+            disable=not progress,
+        )
         observations = []
-        for parquet_path in sorted(self.root.glob("data/**/*.parquet")):
+        for parquet_path in parquet_paths:
             df = pd.read_parquet(parquet_path)
             fi = df["frame_index"].apply(
                 lambda x: int(x[0]) if hasattr(x, "__len__") else int(x)
             )
             for frame_pos in df.index[fi == 0]:
-                obs = {
-                    cam: self._load_video_frame_at(self._video_path_v2(parquet_path, cam), 0)
-                    for cam in self.camera_keys
-                }
+                obs: dict[str, torch.Tensor] = {}
+                for cam in self.camera_keys:
+                    obs[cam] = self._load_video_frame_at(
+                        self._video_path_v2(parquet_path, cam), 0
+                    )
+                    pbar.update(1)
                 row = df.loc[frame_pos]
                 for key in self.state_keys:
                     obs[key] = torch.tensor(row[key], dtype=torch.float32)
                 observations.append(obs)
+        pbar.close()
 
         return observations
 
@@ -147,7 +172,7 @@ class LeRobotDatasetLoader:
         raise ValueError(f"Frame {frame_idx} not found in {video_path}")
 
     def _decode_frames_at_timestamps(
-        self, video_path: Path, timestamps: list[float]
+        self, video_path: Path, timestamps: list[float], pbar=None
     ) -> list[torch.Tensor]:
         """Decode the exact frame at each timestamp, opening the file only once.
 
@@ -177,4 +202,6 @@ class LeRobotDatasetLoader:
                     .float()
                     / 255.0
                 )
+                if pbar is not None:
+                    pbar.update(1)
         return frames

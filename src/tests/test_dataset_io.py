@@ -123,3 +123,18 @@ def test_v3_first_frame_correct_when_episode_start_not_keyframe(tmp_path):
 
     # Despite starts 4,8 being non-keyframes, the loader returns the exact frames.
     assert _first_frame_grays(root) == pytest.approx([0, 80, 160], abs=8)
+
+
+def test_progress_flag_does_not_change_result(tmp_path):
+    import torch
+
+    root = tmp_path / "ds"
+    _build_gray_dataset(root, lengths=[2, 2, 2])
+    ld = LeRobotDatasetLoader(root)
+
+    with_bar = ld.get_initial_observations(progress=True)
+    without_bar = ld.get_initial_observations(progress=False)
+
+    assert len(with_bar) == len(without_bar) == 3
+    for a, b in zip(with_bar, without_bar):
+        assert torch.equal(a["observation.images.cam"], b["observation.images.cam"])
