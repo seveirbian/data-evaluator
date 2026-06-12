@@ -138,3 +138,20 @@ def test_progress_flag_does_not_change_result(tmp_path):
     assert len(with_bar) == len(without_bar) == 3
     for a, b in zip(with_bar, without_bar):
         assert torch.equal(a["observation.images.cam"], b["observation.images.cam"])
+
+
+def test_parallel_decode_matches_sequential(tmp_path):
+    import torch
+
+    root = tmp_path / "ds"
+    _build_gray_dataset(root, lengths=[3, 2, 4, 1, 2])  # 5 episodes
+    ld = LeRobotDatasetLoader(root)
+
+    sequential = ld.get_initial_observations(num_workers=1, progress=False)
+    parallel = ld.get_initial_observations(num_workers=4, progress=False)
+
+    assert len(sequential) == len(parallel) == 5
+    # Episode order and frame content must be identical regardless of worker count.
+    for a, b in zip(sequential, parallel):
+        assert torch.equal(a["observation.images.cam"], b["observation.images.cam"])
+        assert torch.equal(a["observation.state"], b["observation.state"])

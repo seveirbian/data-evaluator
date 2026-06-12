@@ -29,17 +29,44 @@ class LeRobotDatasetLoader:
         ]
 
     def get_initial_observations(
-        self, progress: bool = True
+        self, progress: bool = True, num_workers: int | None = None
     ) -> list[dict[str, torch.Tensor]]:
         """Return one observation dict per episode (frame_index == 0), in episode order.
 
         Args:
             progress: show a tqdm progress bar while decoding first frames (the slow
                 part for large datasets). Set False to silence it.
+            num_workers: number of threads used to decode first frames in parallel
+                (ffmpeg releases the GIL during decode, so threads parallelize). 1
+                forces sequential decoding. Defaults to ``min(8, os.cpu_count())``.
         """
+        import os
+
+        if num_workers is None:
+            num_workers = min(8, os.cpu_count() or 1)
+        num_workers = max(1, num_workers)
+
         if self.version == "v2.0":
-            return self._initial_observations_v2(progress)
-        return self._initial_observations_v3(progress)
+            return self._initial_observations_v2(progress, num_workers)
+        return self._initial_observations_v3(progress, num_workers)
+
+    @staticmethod
+    def _run_tasks(tasks: list, fn, num_workers: int) -> list:
+        """Run fn over tasks, sequentially or in a thread pool, preserving order."""
+        if num_workers <= 1 or len(tasks) <= 1:
+            return [fn(t) for t in tasks]
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=num_workers) as pool:
+            return list(pool.map(fn, tasks))
+
+    @staticmethod
+    def _split_contiguous(items: list, n: int) -> list[list]:
+        """Split a list into at most n contiguous, near-equal chunks."""
+        if n <= 1 or len(items) <= 1:
+            return [items]
+        size = (len(items) + n - 1) // n
+        return [items[i : i + size] for i in range(0, len(items), size)]
 
     def _first_frame_states(self) -> dict[int, "pd.Series"]:
         """Map episode_index -> the frame_index==0 data row (for state features)."""
@@ -57,7 +84,9 @@ class LeRobotDatasetLoader:
                 states[ei] = row
         return states
 
-    def _initial_observations_v3(self, progress: bool = True) -> list[dict[str, torch.Tensor]]:
+    def _initial_observations_v3(
+        self, progress: bool = True, num_workers: int = 1
+    ) -> list[dict[str, torch.Tensor]]:
         """v3.0: locate each camera's first frame via meta/episodes.
 
         Multiple episodes share a video file, and each camera is partitioned and
@@ -86,9 +115,11 @@ class LeRobotDatasetLoader:
             unit="frame",
             disable=not progress,
         )
-        # Group episodes by (camera, video file) so each shared video file is opened
-        # ONCE — re-opening a large shared file per episode dominates wall-time for
-        # many-episode datasets.
+        # Build decode tasks. Group episodes by (camera, video file) so each shared
+        # file is opened only as many times as there are worker chunks for it; split
+        # each file's episodes into contiguous chunks so a single large file is also
+        # decoded in parallel (each task opens its own container — read-safe).
+        tasks: list[tuple[str, str, list[tuple[float, int]]]] = []
         for cam in self.camera_keys:
             by_file: dict[str, list[tuple[float, int]]] = {}
             for _, em in ep_meta.iterrows():
@@ -102,12 +133,20 @@ class LeRobotDatasetLoader:
                 by_file.setdefault(str(video_path), []).append((ts, ei))
 
             for video_path, items in by_file.items():
-                items.sort()  # ascending timestamp
-                frames = self._decode_frames_at_timestamps(
-                    Path(video_path), [ts for ts, _ in items], pbar=pbar
-                )
-                for (_, ei), frame in zip(items, frames):
-                    obs_by_ep[ei][cam] = frame
+                items.sort()  # ascending timestamp (keep chunks sorted for seeking)
+                for chunk in self._split_contiguous(items, num_workers):
+                    tasks.append((cam, video_path, chunk))
+
+        def _run(task):
+            cam, video_path, chunk = task
+            frames = self._decode_frames_at_timestamps(
+                Path(video_path), [ts for ts, _ in chunk], pbar=pbar
+            )
+            return cam, [ei for _, ei in chunk], frames
+
+        for cam, eis, frames in self._run_tasks(tasks, _run, num_workers):
+            for ei, frame in zip(eis, frames):
+                obs_by_ep[ei][cam] = frame
         pbar.close()
 
         observations = []
@@ -120,35 +159,52 @@ class LeRobotDatasetLoader:
 
         return observations
 
-    def _initial_observations_v2(self, progress: bool = True) -> list[dict[str, torch.Tensor]]:
+    def _initial_observations_v2(
+        self, progress: bool = True, num_workers: int = 1
+    ) -> list[dict[str, torch.Tensor]]:
         """v2.0: one video per episode; the initial frame is always video frame 0."""
         import pandas as pd
 
-        parquet_paths = sorted(self.root.glob("data/**/*.parquet"))
-        pbar = tqdm(
-            total=len(parquet_paths) * len(self.camera_keys),
-            desc="Reading first frames",
-            unit="frame",
-            disable=not progress,
-        )
-        observations = []
-        for parquet_path in parquet_paths:
+        # Collect first-frame rows in order; one (episode index, parquet) per episode.
+        entries: list[tuple["pd.Series", Path]] = []
+        for parquet_path in sorted(self.root.glob("data/**/*.parquet")):
             df = pd.read_parquet(parquet_path)
             fi = df["frame_index"].apply(
                 lambda x: int(x[0]) if hasattr(x, "__len__") else int(x)
             )
             for frame_pos in df.index[fi == 0]:
-                obs: dict[str, torch.Tensor] = {}
-                for cam in self.camera_keys:
-                    obs[cam] = self._load_video_frame_at(
-                        self._video_path_v2(parquet_path, cam), 0
-                    )
-                    pbar.update(1)
-                row = df.loc[frame_pos]
-                for key in self.state_keys:
-                    obs[key] = torch.tensor(row[key], dtype=torch.float32)
-                observations.append(obs)
+                entries.append((df.loc[frame_pos], parquet_path))
+
+        pbar = tqdm(
+            total=len(entries) * len(self.camera_keys),
+            desc="Reading first frames",
+            unit="frame",
+            disable=not progress,
+        )
+
+        # One decode task per (episode, camera); v2.0 stores one video per episode.
+        tasks = [
+            (idx, cam, self._video_path_v2(parquet_path, cam))
+            for idx, (_, parquet_path) in enumerate(entries)
+            for cam in self.camera_keys
+        ]
+
+        def _run(task):
+            idx, cam, video_path = task
+            frame = self._load_video_frame_at(video_path, 0)
+            pbar.update(1)
+            return idx, cam, frame
+
+        obs_list: list[dict[str, torch.Tensor]] = [{} for _ in entries]
+        for idx, cam, frame in self._run_tasks(tasks, _run, num_workers):
+            obs_list[idx][cam] = frame
         pbar.close()
+
+        observations = []
+        for (row, _), obs in zip(entries, obs_list):
+            for key in self.state_keys:
+                obs[key] = torch.tensor(row[key], dtype=torch.float32)
+            observations.append(obs)
 
         return observations
 
